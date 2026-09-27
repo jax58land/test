@@ -25,6 +25,7 @@ GitHub のこのリポジトリ → `dist/` フォルダ → 各ファイル →
 2. 記事①（無料）: `content/note/01-free-voltage-drop.md` をコピペ。【URL】部分をBOOTHのURLに置換して公開
 3. 記事②（有料 ¥780）: `content/note/02-paid-ai-prompts.md` をコピペ。【有料ライン】の位置に有料エリアを設定して公開
    - 有料記事の販売には、noteの設定で売上の受取口座登録が必要です
+4. 記事③（無料）: `content/note/03-free-ampacity.md` をコピペ。【URL】部分を記事①・BOOTHのURLに置換して公開（①の数日後でOK）
 
 ## 4. 終わったら（1分）
 `pdca/inbox.md` の「未処理」に、出品したURLを書いてください。翌朝の自動PDCAが記事内のURLを差し替え、次の商品に進みます。
