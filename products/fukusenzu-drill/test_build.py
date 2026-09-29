@@ -21,7 +21,7 @@ def must_fail(p, wires, why):
 
 def test_all_problems_verify():
     for p in PROBLEMS:
-        assert verify(p, generate(p)) == 2 ** sum(d.kind == "switch" for d in p.devices())
+        assert verify(p, generate(p)) == 2 ** sum(d.kind in ("switch", "switch3") for d in p.devices())
 
 
 def test_problem1_expected_wiring():
@@ -48,7 +48,7 @@ def test_detects_broken_wiring():
         must_fail(p, w, "電灯が常時点灯")
         # 2) スイッチを接地側に入れる
         w = copy.deepcopy(base)
-        s = next(x for x in w if x.end_b.startswith("S-") and ":1" in x.end_b)
+        s = next(x for x in w if x.net == "L" and x.end_b.startswith("S"))
         s.end_a = s.end_a.split(":")[0] + ":N"
         must_fail(p, w, "スイッチが接地側")
         # 3) 電灯のW端子に黒
@@ -63,6 +63,26 @@ def test_detects_broken_wiring():
         cl = next(x for x in w if x.end_b.startswith("C") and x.end_b.endswith(":L"))
         cw.end_a, cl.end_a = cl.end_a, cw.end_a
         must_fail(p, w, "コンセント極性")
+
+
+def test_problem3_three_way():
+    p = PROBLEMS[2]
+    w = generate(p)
+    ends = {(x.end_b, x.color) for x in w}
+    assert ("S3-A:0", "黒") in ends and ("S3-B:0", "黒") in ends   # 0端子: 電源側は非接地側、負荷側は返り線
+    for sid in ("S3-A", "S3-B"):
+        assert (f"{sid}:1", "白") in ends and (f"{sid}:3", "赤") in ends
+    assert verify(p, w) == 4
+    # 渡り線の片方を返り線側（0端子）につなぐと、片側から点滅できなくなる
+    bad = copy.deepcopy(w)
+    t1 = next(x for x in bad if x.end_b == "S3-B:1")
+    t1.end_a = "B1:R-イ"
+    must_fail(p, bad, "3路の渡り線ミス")
+    # 電源側と負荷側の3路の0端子を入れ替え（どちらも非接地側）→ 電灯が点かない/短絡
+    bad = copy.deepcopy(w)
+    r = next(x for x in bad if x.end_b == "S3-B:0")
+    r.end_a = "B1:L"
+    must_fail(p, bad, "3路の0端子ミス")
 
 
 def test_pdf(tmp=Path(__file__).resolve().parent / "_test.pdf"):

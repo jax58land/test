@@ -16,9 +16,10 @@ CORE_COLORS = {2: ["黒", "白"], 3: ["黒", "白", "赤"]}
 @dataclass
 class Device:
     id: str          # 例 "L-イ", "S-イ", "C1"
-    kind: str        # "lamp" | "switch" | "outlet"
+    kind: str        # "lamp" | "switch"（片切）| "switch3"（3路）| "outlet"
     label: str       # 図に書く記号の文字（イ・ロ など）
-    controls: str = ""   # switch のみ: 点滅させる lamp の label
+    controls: str = ""   # switch/switch3: 点滅させる lamp の label
+    first: bool = False  # switch3 のみ: 電源側（0端子に非接地側が来る）なら True
 
 
 @dataclass
@@ -83,6 +84,11 @@ def generate(p: Problem):
             elif d.kind == "outlet":
                 # 手順3: コンセントは電源に直接（W端子に白）
                 need += [("N", f"{d.id}:W"), ("L", f"{d.id}:L")]
+        for d in lb.devices:
+            if d.kind == "switch3":
+                # 3路: 0端子に電源側は非接地側、負荷側は返り線。1・3端子はもう一方の3路と渡り線どうしで結ぶ
+                need += [("L" if d.first else f"R-{d.controls}", f"{d.id}:0"),
+                         (f"T{d.controls}-1", f"{d.id}:1"), (f"T{d.controls}-3", f"{d.id}:3")]
         sw = [d for d in lb.devices if d.kind == "switch"]
         if sw:
             # 手順3: 非接地側（黒）はスイッチへ。同じ場所に複数ならスイッチ間は渡り線（器具側で共通）
@@ -129,6 +135,8 @@ def simulate(p: Problem, wires, state):
     for d in p.devices():
         if d.kind == "switch" and state.get(d.id):
             uf.union(f"{d.id}:1", f"{d.id}:2")
+        if d.kind == "switch3":   # OFF: 0-1 / ON: 0-3
+            uf.union(f"{d.id}:0", f"{d.id}:{3 if state.get(d.id) else 1}")
     L, N = uf.find("電源:L"), uf.find("電源:N")
     assert L != N, "短絡: 電源の L と N がつながっている"
     lit, live = set(), set()
@@ -142,23 +150,39 @@ def simulate(p: Problem, wires, state):
 
 
 def verify(p: Problem, wires):
-    """全スイッチ状態で「電灯イはスイッチイがONのときだけ点く」「コンセントは常に使える」を確認。"""
-    sws = [d for d in p.devices() if d.kind == "switch"]
+    """全スイッチ状態で点灯を確認する。
+    片切: 電灯イはスイッチイがONのときだけ点く。
+    3路: どの状態からでも、同じ組の3路をどちらか1個切り替えると電灯の点滅が反転する（両側から点滅できる）。
+    コンセントは常に使える。"""
+    sws = [d for d in p.devices() if d.kind in ("switch", "switch3")]
     lamps = [d for d in p.devices() if d.kind == "lamp"]
     outlets = [d.id for d in p.devices() if d.kind == "outlet"]
-    for combo in product([False, True], repeat=len(sws)):
+    three = {lp.label for lp in lamps if any(s.kind == "switch3" and s.controls == lp.label for s in sws)}
+    combos = list(product([False, True], repeat=len(sws)))
+    result = {}
+    for combo in combos:
         state = {s.id: on for s, on in zip(sws, combo)}
         lit, live = simulate(p, wires, state)
-        expect = {lp.label for lp in lamps if any(s.controls == lp.label and state[s.id] for s in sws)}
-        assert lit == expect, f"{state}: 点灯 {lit} ≠ 期待 {expect}"
+        expect = {lp.label for lp in lamps
+                  if any(s.kind == "switch" and s.controls == lp.label and state[s.id] for s in sws)}
+        assert lit - three == expect, f"{state}: 点灯 {lit - three} ≠ 期待 {expect}"
         assert live == set(outlets), f"{state}: コンセント {live} ≠ {outlets}"
+        result[combo] = lit
+    for label in three:
+        assert any(label in lit for lit in result.values()), f"電灯{label}が一度も点かない"
+        for combo, lit in result.items():
+            for i, s in enumerate(sws):
+                if s.kind == "switch3" and s.controls == label:
+                    flipped = tuple(not v if j == i else v for j, v in enumerate(combo))
+                    assert (label in lit) != (label in result[flipped]), \
+                        f"3路{s.id}を切り替えても電灯{label}が変わらない: {combo}"
     # 色のルール: 接地側（N）はすべて白。白が N 以外に使われるのはスイッチ行きのケーブルだけ
     for w in wires:
         c = p.cables[w.cable]
         if w.net == "N":
             assert w.color == "白", f"接地側が白でない: {w}"
         elif w.color == "白":
-            assert any(d.kind == "switch" for d in p.loc(c.b).devices), f"白を非接地側に使用: {w}"
+            assert any(d.kind in ("switch", "switch3") for d in p.loc(c.b).devices), f"白を非接地側に使用: {w}"
         # 器具のW端子には必ず白
         for t in _terms(w.end_b):
             if t.endswith(":W"):
@@ -167,7 +191,7 @@ def verify(p: Problem, wires):
     for ci, c in enumerate(p.cables):
         cols = sorted(w.color for w in wires if w.cable == ci)
         assert cols == sorted(CORE_COLORS[c.cores]), f"ケーブル{ci} {c.spec}: 心線 {cols}"
-    return len(list(product([False, True], repeat=len(sws))))
+    return len(combos)
 
 
 def box_joints(p: Problem, wires):
@@ -218,6 +242,25 @@ PROBLEMS = [
             Cable("B1", "電源", "VVF1.6-2C", 2),
             Cable("B1", "P1", "VVF1.6-2C", 2),
             Cable("B1", "P2", "VVF1.6-2C", 2),
+            Cable("B1", "P3", "VVF1.6-3C", 3),
+            Cable("B1", "P4", "VVF1.6-2C", 2),
+        ],
+    ),
+    Problem(
+        3, "電灯1灯を2か所から点滅（3路スイッチ）＋コンセント",
+        "3路の0端子には「電源側は黒（非接地側）」「電灯側は返り線」。1と3はスイッチどうしを渡り線で結ぶだけ。",
+        [
+            Location("電源", "source", 20, 110),
+            Location("B1", "box", 90, 110),
+            Location("P1", "device", 90, 165, [_dev("L-イ", "lamp", "イ")]),
+            Location("P2", "device", 50, 45, [_dev("S3-A", "switch3", "イ", controls="イ", first=True)]),
+            Location("P3", "device", 135, 45, [_dev("S3-B", "switch3", "イ", controls="イ")]),
+            Location("P4", "device", 160, 110, [_dev("C1", "outlet", "")]),
+        ],
+        [
+            Cable("B1", "電源", "VVF1.6-2C", 2),
+            Cable("B1", "P1", "VVF1.6-2C", 2),
+            Cable("B1", "P2", "VVF1.6-3C", 3),
             Cable("B1", "P3", "VVF1.6-3C", 3),
             Cable("B1", "P4", "VVF1.6-2C", 2),
         ],

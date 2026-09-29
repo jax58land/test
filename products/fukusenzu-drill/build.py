@@ -25,7 +25,7 @@ STEPS = [
     "① 電源・器具・ボックスを単線図と同じ位置に描く",
     "② 接地側（白）: 電源 → ボックス → 電灯とコンセントのW端子すべて",
     "③ 非接地側（黒）: 電源 → ボックス → スイッチとコンセント",
-    "④ 返り線: スイッチ → 同じ記号の電灯（イはイへ）",
+    "④ 返り線: スイッチ → 同じ記号の電灯（イはイへ）。3路は1・3端子どうしを結ぶ",
     "⑤ 色を決める: 白は接地側、スイッチ行きの黒は電源、残りを返り線に",
     "⑥ ボックス内の接続点ごとに本数を数える（スリーブ/コネクタ選定の準備）",
     "⑦ 見直し: スイッチを1個ずつON/OFFして、正しい電灯だけが点くか指でなぞる",
@@ -49,6 +49,10 @@ def symbol(c, kind, x, y, label, r=3.2 * mm):
     elif kind == "switch":
         c.setFillColorRGB(0, 0, 0)
         c.circle(x, y, r * .45, fill=1)
+    elif kind == "switch3":
+        c.setFillColorRGB(0, 0, 0)
+        c.circle(x, y, r * .45, fill=1)
+        text(c, x + r * .5, y - r * 1.3, "3", 7)
     elif kind == "outlet":
         c.circle(x, y, r, fill=1)
         c.line(x - r * .35, y - r * .5, x - r * .35, y + r * .5)
@@ -84,7 +88,7 @@ def draw_single(c, p, ox, oy, s):
 
 
 def terminal_xy(p, term, P):
-    """器具端子の座標。W/1 は左、L/2 は右。同じ場所の器具は横に並べる。"""
+    """器具端子の座標。W/1 は左、L/2 は右（3路は 0 が左、1・3 が右の上下）。同じ場所の器具は横に並べる。"""
     did, t = term.split(":")
     if did == "電源":
         x, y = P(p.loc("電源"))
@@ -94,8 +98,19 @@ def terminal_xy(p, term, P):
             if d.id == did:
                 x, y = P(l)
                 x += (i - (len(l.devices) - 1) / 2) * DEV_GAP
+                if d.kind == "switch3":
+                    return x + (-6 if t == "0" else 6) * mm, y + {"0": 0, "1": 1.3, "3": -1.3}[t] * mm
                 return x + (-6 if t in ("W", "1") else 6) * mm, y
     raise KeyError(term)
+
+
+def net_label(net):
+    """接続点の短い名前: N / L / イ（返り線）/ イ1（3路イの1端子どうし）"""
+    if net.startswith("R-"):
+        return net[2:]
+    if net.startswith("T"):
+        return net[1:-2] + net[-1]
+    return net
 
 
 def draw_multi(c, p, wires, ox, oy, s):
@@ -133,7 +148,7 @@ def draw_multi(c, p, wires, ox, oy, s):
         c.setFillColorRGB(0, 0, 0)
         c.circle(x, y, 1.1 * mm, fill=1)
         net = j.split(":")[1]
-        text(c, x + 1.3 * mm, y + 1.3 * mm, net if len(net) == 1 else net[2:], 6, (0.1, 0.3, 0.7))
+        text(c, x + 1.3 * mm, y + 1.3 * mm, net_label(net), 6, (0.1, 0.3, 0.7))
     # 器具
     for l in p.locations:
         x, y = P(l)
@@ -148,14 +163,21 @@ def draw_multi(c, p, wires, ox, oy, s):
             c.setFillColorRGB(1, 1, 1)
             c.setLineWidth(0.8)
             c.roundRect(x + dx - 7 * mm, y - 2.2 * mm, 14 * mm, 4.4 * mm, 1 * mm, fill=1)
-            name = {"lamp": "電灯", "switch": "SW", "outlet": "コンセント"}[d.kind]
+            name = {"lamp": "電灯", "switch": "SW", "switch3": "3路", "outlet": "コンセント"}[d.kind]
             c.setFont(FONT, 6)
             c.setFillColorRGB(0, 0, 0)
             c.drawCentredString(x + dx, y - 1 * mm, name + d.label)
-            for side in (-6, 6):
-                c.setFillColorRGB(0, 0, 0)
-                c.circle(x + dx + side * mm, y, 0.7 * mm, fill=1)
-            if d.kind != "switch":
+            if d.kind == "switch3":
+                for t, (tx, ty) in {"0": (-6, 0), "1": (6, 1.3), "3": (6, -1.3)}.items():
+                    c.setFillColorRGB(0, 0, 0)
+                    c.circle(x + dx + tx * mm, y + ty * mm, 0.6 * mm, fill=1)
+                    text(c, x + dx + (tx + (1 if tx > 0 else -2.2)) * mm, y + (ty - 0.8) * mm, t, 5.5,
+                         (0.3, 0.3, 0.3))
+            else:
+                for side in (-6, 6):
+                    c.setFillColorRGB(0, 0, 0)
+                    c.circle(x + dx + side * mm, y, 0.7 * mm, fill=1)
+            if d.kind not in ("switch", "switch3"):
                 text(c, x + dx - 7 * mm, y + 2.8 * mm, "W", 6, (0.3, 0.3, 0.3))
     c.setLineWidth(1)
 
@@ -191,14 +213,18 @@ def page_problem(c, p, wires, cases):
     legend(c, 60 * mm, H - 136 * mm)
     draw_multi(c, p, wires, 18 * mm, 0, 0.88)
     # 接続点の表
-    y = 28 * mm
-    text(c, 15 * mm, y, "ボックス内の接続点", 9)
-    for j, cols in box_joints(p, wires).items():
-        y -= 4.5 * mm
+    text(c, 15 * mm, 28 * mm, "ボックス内の接続点", 9)
+    for i, (j, cols) in enumerate(box_joints(p, wires).items()):
         net = j.split(":")[1]
-        name = {"N": "接地側", "L": "非接地側"}.get(net, f"返り線（{net[2:]}）")
-        text(c, 18 * mm, y, f"・{name}: {len(cols)}本（{'・'.join(cols)}）", 8)
-    text(c, 110 * mm, 28 * mm, f"検証済み: スイッチの全{cases}通りで点灯を確認", 7.5, (0.1, 0.45, 0.1))
+        if net in ("N", "L"):
+            name = {"N": "接地側", "L": "非接地側"}[net]
+        elif net.startswith("R-"):
+            name = f"返り線（{net[2:]}）"
+        else:
+            name = f"3路の渡り線（{net[1:-2]}・{net[-1]}端子）"
+        text(c, (18 + (i // 3) * 72) * mm, (23.5 - (i % 3) * 4.5) * mm,
+             f"・{name}: {len(cols)}本（{'・'.join(cols)}）", 8)
+    text(c, 15 * mm, H - 30 * mm, f"【検証済み】全{cases}通りのON/OFFで点灯を検証済み", 7.5, (0.1, 0.45, 0.1))
     text(c, 15 * mm, 8 * mm, DISCLAIMER, 6.5, (0.35, 0.35, 0.35))
     c.showPage()
 
