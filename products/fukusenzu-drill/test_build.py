@@ -85,6 +85,34 @@ def test_problem3_three_way():
     must_fail(p, bad, "3路の0端子ミス")
 
 
+def test_pilot_lamps():
+    from circuits import simulate
+    by_no = {p.no: p for p in PROBLEMS}
+    # 異時点滅: OFFでPLだけ点く（電灯と直列でも電灯は点かない）、ONで電灯だけ点く
+    p = by_no[4]
+    w = generate(p)
+    assert simulate(p, w, {"S-イ": False}) == (set(), {"C1"}, {"PL1"})
+    assert simulate(p, w, {"S-イ": True}) == ({"イ"}, {"C1"}, set())
+    assert all(p.cables[x.cable].cores == 2 for x in w if p.cables[x.cable].b == "P2")   # スイッチ行きは2心
+    # 同時点滅・常時点灯はスイッチ行きが3心で、白（接地側）がPLへ行く
+    for no in (5, 6):
+        p = by_no[no]
+        w = generate(p)
+        assert any(x.color == "白" and x.net == "N" and "PL1:a" in x.end_b for x in w)
+    # 取り違え: 同時点滅の配線を「異時点滅」として、常時点灯の配線を「同時点滅」として検査すると不合格になる
+    p = copy.deepcopy(by_no[5])
+    next(d for d in p.devices() if d.kind == "pilot").mode = "diff"
+    must_fail(p, generate(by_no[5]), "同時点滅の配線を異時点滅として検査")
+    p = copy.deepcopy(by_no[6])
+    next(d for d in p.devices() if d.kind == "pilot").mode = "same"
+    must_fail(p, generate(by_no[6]), "常時点灯の配線を同時点滅として検査")
+
+
+def test_page_text_fits():
+    for p in PROBLEMS:
+        assert len(p.note) <= 60, f"問題{p.no}の説明が長すぎて1行に収まらない"
+
+
 def test_pdf(tmp=Path(__file__).resolve().parent / "_test.pdf"):
     out = main(tmp)
     data = out.read_bytes()

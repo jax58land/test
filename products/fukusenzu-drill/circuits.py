@@ -16,10 +16,11 @@ CORE_COLORS = {2: ["黒", "白"], 3: ["黒", "白", "赤"]}
 @dataclass
 class Device:
     id: str          # 例 "L-イ", "S-イ", "C1"
-    kind: str        # "lamp" | "switch"（片切）| "switch3"（3路）| "outlet"
+    kind: str        # "lamp" | "switch"（片切）| "switch3"（3路）| "outlet" | "pilot"（確認表示灯）
     label: str       # 図に書く記号の文字（イ・ロ など）
     controls: str = ""   # switch/switch3: 点滅させる lamp の label
     first: bool = False  # switch3 のみ: 電源側（0端子に非接地側が来る）なら True
+    mode: str = ""       # pilot のみ: "always"（常時点灯）| "same"（同時点滅）| "diff"（異時点滅）
 
 
 @dataclass
@@ -95,6 +96,19 @@ def generate(p: Problem):
             need.append(("L", "+".join(f"{d.id}:1" for d in sw)))
             # 手順4: 返り線（スイッチ → 電灯）。スイッチ側の心線は黒以外
             need += [(f"R-{d.controls}", f"{d.id}:2") for d in sw]
+        for d in lb.devices:
+            if d.kind == "pilot":
+                # パイロットランプ: 同じ場所のスイッチ（片切）と器具側の渡り線で並べる
+                #   常時点灯 = 非接地側と接地側の間 / 同時点滅 = 返り線と接地側の間（電灯と並列）
+                #   異時点滅 = 非接地側と返り線の間（スイッチと並列。OFFのとき電灯と直列になって点く）
+                a_net, b_net = {"always": ("N", "L"), "same": ("N", f"R-{d.controls}"),
+                                "diff": ("L", f"R-{d.controls}")}[d.mode]
+                for net, t in ((a_net, "a"), (b_net, "b")):
+                    i = next((k for k, (n, _) in enumerate(need) if n == net), None)
+                    if i is None:
+                        need.append((net, f"{d.id}:{t}"))
+                    else:
+                        need[i] = (net, need[i][1] + f"+{d.id}:{t}")
         assert len(need) == c.cores, f"{lb.id}: 必要な心線 {len(need)} ≠ ケーブル心数 {c.cores}"
         # 手順5: 色決め。N は白、L は黒、返り線は残りの色を 黒→白→赤 の順に使う
         order = sorted(need, key=lambda n: {"N": 0, "L": 1}.get(n[0], 2))
@@ -125,8 +139,39 @@ def _terms(end):
     return end.split("+")   # 渡り線でまとめた端子
 
 
+# 電圧計算用の抵抗値[Ω]（100V で 電灯 約100W、パイロットランプは電流がごく小さい）
+R_LAMP, R_PILOT, R_LEAK = 100.0, 20000.0, 1e9
+
+
+def _solve(n, stamps, fixed):
+    """節点解析。stamps: [(i, j, R)]、fixed: {i: 電圧}。各節点の電圧のリストを返す。"""
+    G = [[0.0] * n for _ in range(n)]
+    b = [0.0] * n
+    for i, j, r in stamps:
+        g = 1 / r
+        G[i][i] += g
+        G[j][j] += g
+        G[i][j] -= g
+        G[j][i] -= g
+    for i, v in fixed.items():
+        G[i] = [0.0] * n
+        G[i][i] = 1.0
+        b[i] = v
+    for col in range(n):     # ガウスの消去法（部分ピボット）
+        piv = max(range(col, n), key=lambda r: abs(G[r][col]))
+        G[col], G[piv] = G[piv], G[col]
+        b[col], b[piv] = b[piv], b[col]
+        for r in range(n):
+            if r != col and G[r][col]:
+                f = G[r][col] / G[col][col]
+                G[r] = [x - f * y for x, y in zip(G[r], G[col])]
+                b[r] -= f * b[col]
+    return [b[i] / G[i][i] for i in range(n)]
+
+
 def simulate(p: Problem, wires, state):
-    """state: {switch_id: bool}。点灯している lamp label の集合と、使えるコンセント id の集合を返す。"""
+    """state: {switch_id: bool}。電灯・パイロットランプを抵抗として各部の電圧を計算し、
+    （点灯している電灯 label, 使えるコンセント id, 点灯しているパイロットランプ id）の集合を返す。"""
     uf = _UF()
     for w in wires:
         ts = _terms(w.end_a) + _terms(w.end_b)
@@ -139,34 +184,57 @@ def simulate(p: Problem, wires, state):
             uf.union(f"{d.id}:0", f"{d.id}:{3 if state.get(d.id) else 1}")
     L, N = uf.find("電源:L"), uf.find("電源:N")
     assert L != N, "短絡: 電源の L と N がつながっている"
-    lit, live = set(), set()
+    loads = []   # (device, 端子1, 端子2, R)
     for d in p.devices():
         if d.kind in ("lamp", "outlet"):
-            w, l = uf.find(f"{d.id}:W"), uf.find(f"{d.id}:L")
-            if w == N and l == L:
-                (lit if d.kind == "lamp" else live).add(d.label if d.kind == "lamp" else d.id)
-            assert not (w == L and l == N), f"{d.id}: W端子に非接地側が来ている（極性逆）"
-    return lit, live
+            assert uf.find(f"{d.id}:W") != L, f"{d.id}: W端子に非接地側が来ている（極性逆）"
+            loads.append((d, f"{d.id}:W", f"{d.id}:L", R_LAMP if d.kind == "lamp" else None))
+        elif d.kind == "pilot":
+            loads.append((d, f"{d.id}:a", f"{d.id}:b", R_PILOT))
+    nodes = {L: 0, N: 1}
+    for _, t1, t2, _ in loads:
+        for t in (t1, t2):
+            nodes.setdefault(uf.find(t), len(nodes))
+    stamps = [(nodes[uf.find(t1)], nodes[uf.find(t2)], r) for _, t1, t2, r in loads
+              if r and uf.find(t1) != uf.find(t2)]
+    stamps += [(i, 1, R_LEAK) for i in range(2, len(nodes))]    # どこにもつながらない節点の電圧を0に寄せる
+    v = _solve(len(nodes), stamps, {0: 100.0, 1: 0.0})
+    across = lambda t1, t2: abs(v[nodes[uf.find(t1)]] - v[nodes[uf.find(t2)]])
+    lit, live, pl = set(), set(), set()
+    for d, t1, t2, _ in loads:
+        on = across(t1, t2) > 50
+        if d.kind == "lamp" and on:
+            lit.add(d.label)
+        elif d.kind == "outlet" and on and uf.find(t1) == N and uf.find(t2) == L:
+            live.add(d.id)
+        elif d.kind == "pilot" and on:
+            pl.add(d.id)
+    return lit, live, pl
 
 
 def verify(p: Problem, wires):
     """全スイッチ状態で点灯を確認する。
     片切: 電灯イはスイッチイがONのときだけ点く。
     3路: どの状態からでも、同じ組の3路をどちらか1個切り替えると電灯の点滅が反転する（両側から点滅できる）。
+    パイロットランプ: 常時点灯=いつも点く / 同時点滅=電灯と同時 / 異時点滅=電灯が消えているときだけ点く。
     コンセントは常に使える。"""
     sws = [d for d in p.devices() if d.kind in ("switch", "switch3")]
     lamps = [d for d in p.devices() if d.kind == "lamp"]
     outlets = [d.id for d in p.devices() if d.kind == "outlet"]
+    pilots = [d for d in p.devices() if d.kind == "pilot"]
     three = {lp.label for lp in lamps if any(s.kind == "switch3" and s.controls == lp.label for s in sws)}
     combos = list(product([False, True], repeat=len(sws)))
     result = {}
     for combo in combos:
         state = {s.id: on for s, on in zip(sws, combo)}
-        lit, live = simulate(p, wires, state)
+        lit, live, pl = simulate(p, wires, state)
         expect = {lp.label for lp in lamps
                   if any(s.kind == "switch" and s.controls == lp.label and state[s.id] for s in sws)}
         assert lit - three == expect, f"{state}: 点灯 {lit - three} ≠ 期待 {expect}"
         assert live == set(outlets), f"{state}: コンセント {live} ≠ {outlets}"
+        for d in pilots:
+            want = {"always": True, "same": d.controls in lit, "diff": d.controls not in lit}[d.mode]
+            assert (d.id in pl) == want, f"{state}: パイロットランプ{d.id}（{d.mode}）の点灯が違う"
         result[combo] = lit
     for label in three:
         assert any(label in lit for lit in result.values()), f"電灯{label}が一度も点かない"
@@ -263,6 +331,60 @@ PROBLEMS = [
             Cable("B1", "P2", "VVF1.6-3C", 3),
             Cable("B1", "P3", "VVF1.6-3C", 3),
             Cable("B1", "P4", "VVF1.6-2C", 2),
+        ],
+    ),
+    Problem(
+        4, "パイロットランプ 異時点滅（スイッチの位置表示）",
+        "異時点滅はスイッチと並列。電灯が消えているときだけ、電灯と直列に小さな電流が流れて点く。",
+        [
+            Location("電源", "source", 20, 110),
+            Location("B1", "box", 90, 110),
+            Location("P1", "device", 90, 165, [_dev("L-イ", "lamp", "イ")]),
+            Location("P2", "device", 90, 45, [_dev("S-イ", "switch", "イ", controls="イ"),
+                                              _dev("PL1", "pilot", "", controls="イ", mode="diff")]),
+            Location("P3", "device", 160, 110, [_dev("C1", "outlet", "")]),
+        ],
+        [
+            Cable("B1", "電源", "VVF1.6-2C", 2),
+            Cable("B1", "P1", "VVF1.6-2C", 2),
+            Cable("B1", "P2", "VVF1.6-2C", 2),
+            Cable("B1", "P3", "VVF1.6-2C", 2),
+        ],
+    ),
+    Problem(
+        5, "パイロットランプ 同時点滅（換気扇などの消し忘れ防止）",
+        "同時点滅は電灯と並列（返り線と接地側の間）。スイッチの場所まで白が要るので3心になる。",
+        [
+            Location("電源", "source", 20, 110),
+            Location("B1", "box", 90, 110),
+            Location("P1", "device", 90, 165, [_dev("L-イ", "lamp", "イ")]),
+            Location("P2", "device", 90, 45, [_dev("S-イ", "switch", "イ", controls="イ"),
+                                              _dev("PL1", "pilot", "", controls="イ", mode="same")]),
+            Location("P3", "device", 160, 110, [_dev("C1", "outlet", "")]),
+        ],
+        [
+            Cable("B1", "電源", "VVF1.6-2C", 2),
+            Cable("B1", "P1", "VVF1.6-2C", 2),
+            Cable("B1", "P2", "VVF1.6-3C", 3),
+            Cable("B1", "P3", "VVF1.6-2C", 2),
+        ],
+    ),
+    Problem(
+        6, "パイロットランプ 常時点灯（電源が来ていることの表示）",
+        "常時点灯は非接地側と接地側の間。スイッチとは無関係に点きっぱなし。スイッチ行きは黒・白・赤の3心。",
+        [
+            Location("電源", "source", 20, 110),
+            Location("B1", "box", 90, 110),
+            Location("P1", "device", 90, 165, [_dev("L-イ", "lamp", "イ")]),
+            Location("P2", "device", 90, 45, [_dev("S-イ", "switch", "イ", controls="イ"),
+                                              _dev("PL1", "pilot", "", mode="always")]),
+            Location("P3", "device", 160, 110, [_dev("C1", "outlet", "")]),
+        ],
+        [
+            Cable("B1", "電源", "VVF1.6-2C", 2),
+            Cable("B1", "P1", "VVF1.6-2C", 2),
+            Cable("B1", "P2", "VVF1.6-3C", 3),
+            Cable("B1", "P3", "VVF1.6-2C", 2),
         ],
     ),
 ]

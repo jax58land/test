@@ -25,7 +25,7 @@ STEPS = [
     "① 電源・器具・ボックスを単線図と同じ位置に描く",
     "② 接地側（白）: 電源 → ボックス → 電灯とコンセントのW端子すべて",
     "③ 非接地側（黒）: 電源 → ボックス → スイッチとコンセント",
-    "④ 返り線: スイッチ → 同じ記号の電灯（イはイへ）。3路は1・3端子どうしを結ぶ",
+    "④ 返り線: スイッチ → 同じ記号の電灯（イはイへ）。3路は1・3端子どうしを結ぶ。PLは常時=L-N／同時=返り線-N／異時=スイッチと並列",
     "⑤ 色を決める: 白は接地側、スイッチ行きの黒は電源、残りを返り線に",
     "⑥ ボックス内の接続点ごとに本数を数える（スリーブ/コネクタ選定の準備）",
     "⑦ 見直し: スイッチを1個ずつON/OFFして、正しい電灯だけが点くか指でなぞる",
@@ -53,6 +53,11 @@ def symbol(c, kind, x, y, label, r=3.2 * mm):
         c.setFillColorRGB(0, 0, 0)
         c.circle(x, y, r * .45, fill=1)
         text(c, x + r * .5, y - r * 1.3, "3", 7)
+    elif kind == "pilot":
+        c.circle(x, y, r * .6, fill=1)
+        c.setFillColorRGB(0, 0, 0)
+        c.circle(x, y, r * .2, fill=1)
+        text(c, x - r * .9, y - r * 1.6, "PL", 6.5)
     elif kind == "outlet":
         c.circle(x, y, r, fill=1)
         c.line(x - r * .35, y - r * .5, x - r * .35, y + r * .5)
@@ -100,7 +105,7 @@ def terminal_xy(p, term, P):
                 x += (i - (len(l.devices) - 1) / 2) * DEV_GAP
                 if d.kind == "switch3":
                     return x + (-6 if t == "0" else 6) * mm, y + {"0": 0, "1": 1.3, "3": -1.3}[t] * mm
-                return x + (-6 if t in ("W", "1") else 6) * mm, y
+                return x + (-6 if t in ("W", "1", "a") else 6) * mm, y
     raise KeyError(term)
 
 
@@ -136,12 +141,14 @@ def draw_multi(c, p, wires, ox, oy, s):
         x2, y2 = terminal_xy(p, terms[0], P)
         c.setStrokeColorRGB(*STROKE[w.color])
         c.line(x1, y1, x2, y2)
-        for t in terms[1:]:          # 渡り線（器具側で共通）
+        # 渡り線（器具側で共通）。左側の端子どうしは下、右側の端子どうしは上に回して重ならないようにする
+        off = (-2.5 if terms[0].split(":")[1] in ("W", "1", "a", "0") else 2.5) * mm
+        for t in terms[1:]:
             x3, y3 = terminal_xy(p, t, P)
             c.setDash(1.5, 1.2)
-            c.line(x2, y2 - 2.5 * mm, x3, y3 - 2.5 * mm)
-            c.line(x2, y2, x2, y2 - 2.5 * mm)
-            c.line(x3, y3, x3, y3 - 2.5 * mm)
+            c.line(x2, y2 + off, x3, y3 + off)
+            c.line(x2, y2, x2, y2 + off)
+            c.line(x3, y3, x3, y3 + off)
             c.setDash()
     # 接続点
     for j, (x, y) in jxy.items():
@@ -163,7 +170,7 @@ def draw_multi(c, p, wires, ox, oy, s):
             c.setFillColorRGB(1, 1, 1)
             c.setLineWidth(0.8)
             c.roundRect(x + dx - 7 * mm, y - 2.2 * mm, 14 * mm, 4.4 * mm, 1 * mm, fill=1)
-            name = {"lamp": "電灯", "switch": "SW", "switch3": "3路", "outlet": "コンセント"}[d.kind]
+            name = {"lamp": "電灯", "switch": "SW", "switch3": "3路", "outlet": "コンセント", "pilot": "PL"}[d.kind]
             c.setFont(FONT, 6)
             c.setFillColorRGB(0, 0, 0)
             c.drawCentredString(x + dx, y - 1 * mm, name + d.label)
@@ -177,7 +184,7 @@ def draw_multi(c, p, wires, ox, oy, s):
                 for side in (-6, 6):
                     c.setFillColorRGB(0, 0, 0)
                     c.circle(x + dx + side * mm, y, 0.7 * mm, fill=1)
-            if d.kind not in ("switch", "switch3"):
+            if d.kind not in ("switch", "switch3", "pilot"):
                 text(c, x + dx - 7 * mm, y + 2.8 * mm, "W", 6, (0.3, 0.3, 0.3))
     c.setLineWidth(1)
 
@@ -203,10 +210,12 @@ def page_problem(c, p, wires, cases):
     text(c, 15 * mm, H - 35 * mm, "【単線図】 これを複線図にしてみよう", 10)
     draw_single(c, p, 15 * mm, H - 135 * mm, 0.5)
     text(c, 115 * mm, H - 35 * mm, "【手順】", 10)
-    for i, s in enumerate(STEPS):
-        text(c, 115 * mm, H - (42 + i * 6) * mm, s[:30], 7.5)
-        if len(s) > 30:
-            text(c, 119 * mm, H - (42 + i * 6 + 3) * mm, s[30:], 7.5)
+    y = H - 42 * mm
+    for s in STEPS:       # 1行30字で折り返す
+        for k in range(0, len(s), 30):
+            text(c, (115 if k == 0 else 119) * mm, y, s[k:k + 30], 7.5)
+            y -= 3.3 * mm
+        y -= 1.5 * mm
     c.setStrokeColorRGB(0.7, 0.7, 0.7)
     c.line(15 * mm, H - 128 * mm, W - 15 * mm, H - 128 * mm)
     text(c, 15 * mm, H - 136 * mm, "【解答の複線図】", 10)
