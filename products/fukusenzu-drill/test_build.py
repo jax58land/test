@@ -108,9 +108,33 @@ def test_pilot_lamps():
     must_fail(p, generate(by_no[6]), "常時点灯の配線を同時点滅として検査")
 
 
+def test_two_boxes():
+    from circuits import box_joints
+    by_no = {p.no: p for p in PROBLEMS}
+    # 問題7: ボックス間は N・L・ロの返り線の3本。イの返り線はB1の中だけで完結する
+    p = by_no[7]
+    w = generate(p)
+    between = {x.net: x.color for x in w if p.cables[x.cable].b == "B2"}
+    assert between == {"N": "白", "L": "黒", "R-ロ": "赤"}
+    assert "B2:R-イ" not in box_joints(p, w)
+    # 問題8: ボックス間は N と3路の渡り線2本。L は通らない
+    p = by_no[8]
+    w = generate(p)
+    between = {x.net for x in w if p.cables[x.cable].b == "B2"}
+    assert between == {"N", "Tイ-1", "Tイ-3"}
+    # 誤配線: ボックス間の渡り線を入れ替えても3路は動く（流儀の違い）が、渡り線を N につなぐと検出される
+    bad = copy.deepcopy(w)
+    x = next(x for x in bad if p.cables[x.cable].b == "B2" and x.net == "Tイ-1")
+    x.end_b = "B2:N"
+    must_fail(p, bad, "ボックス間の渡り線を接地側へ")
+
+
 def test_page_text_fits():
+    from circuits import box_joints
     for p in PROBLEMS:
         assert len(p.note) <= 60, f"問題{p.no}の説明が長すぎて1行に収まらない"
+        n = len(box_joints(p, generate(p)))
+        assert n <= (8 if sum(l.kind == "box" for l in p.locations) > 1 else 6), f"問題{p.no}: 接続点の表が入らない"
 
 
 def test_pdf(tmp=Path(__file__).resolve().parent / "_test.pdf"):

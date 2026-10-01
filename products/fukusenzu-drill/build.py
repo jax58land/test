@@ -79,7 +79,12 @@ def draw_single(c, p, ox, oy, s):
         (x1, y1), (x2, y2) = P(p.loc(cb.a)), P(p.loc(cb.b))
         c.setStrokeColorRGB(0, 0, 0)
         c.line(x1, y1, x2, y2)
-        text(c, (x1 + x2) / 2 + 2, (y1 + y2) / 2 + 2, cb.spec, 7, (0.25, 0.25, 0.25))
+        c.setFillColorRGB(0.25, 0.25, 0.25)
+        c.setFont(FONT, 6)
+        if abs(y1 - y2) < 1:      # 横向きのケーブルは線の上に中央寄せ、縦向きは線の右
+            c.drawCentredString((x1 + x2) / 2, y1 + 1.5 * mm, cb.spec)
+        else:
+            c.drawString((x1 + x2) / 2 + 1.5 * mm, (y1 + y2) / 2, cb.spec)
     for l in p.locations:
         x, y = P(l)
         if l.kind in ("source", "box"):
@@ -138,7 +143,7 @@ def draw_multi(c, p, wires, ox, oy, s):
     for w in wires:
         x1, y1 = jxy[w.end_a]
         terms = w.end_b.split("+")
-        x2, y2 = terminal_xy(p, terms[0], P)
+        x2, y2 = jxy[terms[0]] if terms[0] in jxy else terminal_xy(p, terms[0], P)
         c.setStrokeColorRGB(*STROKE[w.color])
         c.line(x1, y1, x2, y2)
         # 渡り線（器具側で共通）。左側の端子どうしは下、右側の端子どうしは上に回して重ならないようにする
@@ -223,16 +228,19 @@ def page_problem(c, p, wires, cases):
     draw_multi(c, p, wires, 18 * mm, 0, 0.88)
     # 接続点の表
     text(c, 15 * mm, 28 * mm, "ボックス内の接続点", 9)
-    for i, (j, cols) in enumerate(box_joints(p, wires).items()):
-        net = j.split(":")[1]
+    joints = box_joints(p, wires)
+    multi = len({j.split(":")[0] for j in joints}) > 1
+    for i, (j, cols) in enumerate(joints.items()):
+        box, net = j.split(":")
         if net in ("N", "L"):
             name = {"N": "接地側", "L": "非接地側"}[net]
         elif net.startswith("R-"):
             name = f"返り線（{net[2:]}）"
         else:
             name = f"3路の渡り線（{net[1:-2]}・{net[-1]}端子）"
-        text(c, (18 + (i // 3) * 72) * mm, (23.5 - (i % 3) * 4.5) * mm,
-             f"・{name}: {len(cols)}本（{'・'.join(cols)}）", 8)
+        rows = 4 if multi else 3
+        text(c, (18 + (i // rows) * 90) * mm, (23.5 - (i % rows) * 3.8) * mm,
+             f"・{box + ' ' if multi else ''}{name}: {len(cols)}本（{'・'.join(cols)}）", 7.5)
     text(c, 15 * mm, H - 30 * mm, f"【検証済み】全{cases}通りのON/OFFで点灯を検証済み", 7.5, (0.1, 0.45, 0.1))
     text(c, 15 * mm, 8 * mm, DISCLAIMER, 6.5, (0.35, 0.35, 0.35))
     c.showPage()

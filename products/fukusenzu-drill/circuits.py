@@ -65,8 +65,71 @@ class Wire:
 
 
 # ---------------------------------------------------------------- 生成（7ステップの手順をコード化）
+def _device_needs(lb):
+    """器具の取付位置 lb へ行くケーブルに必要な心線 [(net, 器具側の端子)]。"""
+    need = []
+    for d in lb.devices:
+        if d.kind == "lamp":
+            # 手順2: 接地側（白）はすべての負荷のW端子へ / 手順4: 返り線は非接地側端子へ
+            need += [("N", f"{d.id}:W"), (f"R-{d.label}", f"{d.id}:L")]
+        elif d.kind == "outlet":
+            # 手順3: コンセントは電源に直接（W端子に白）
+            need += [("N", f"{d.id}:W"), ("L", f"{d.id}:L")]
+    for d in lb.devices:
+        if d.kind == "switch3":
+            # 3路: 0端子に電源側は非接地側、負荷側は返り線。1・3端子はもう一方の3路と渡り線どうしで結ぶ
+            need += [("L" if d.first else f"R-{d.controls}", f"{d.id}:0"),
+                     (f"T{d.controls}-1", f"{d.id}:1"), (f"T{d.controls}-3", f"{d.id}:3")]
+    sw = [d for d in lb.devices if d.kind == "switch"]
+    if sw:
+        # 手順3: 非接地側（黒）はスイッチへ。同じ場所に複数ならスイッチ間は渡り線（器具側で共通）
+        need.append(("L", "+".join(f"{d.id}:1" for d in sw)))
+        # 手順4: 返り線（スイッチ → 電灯）。スイッチ側の心線は黒以外
+        need += [(f"R-{d.controls}", f"{d.id}:2") for d in sw]
+    for d in lb.devices:
+        if d.kind == "pilot":
+            # パイロットランプ: 同じ場所のスイッチ（片切）と器具側の渡り線で並べる
+            #   常時点灯 = 非接地側と接地側の間 / 同時点滅 = 返り線と接地側の間（電灯と並列）
+            #   異時点滅 = 非接地側と返り線の間（スイッチと並列。OFFのとき電灯と直列になって点く）
+            a_net, b_net = {"always": ("N", "L"), "same": ("N", f"R-{d.controls}"),
+                            "diff": ("L", f"R-{d.controls}")}[d.mode]
+            for net, t in ((a_net, "a"), (b_net, "b")):
+                i = next((k for k, (n, _) in enumerate(need) if n == net), None)
+                if i is None:
+                    need.append((net, f"{d.id}:{t}"))
+                else:
+                    need[i] = (net, need[i][1] + f"+{d.id}:{t}")
+    return need
+
+
+def _downstream(p: Problem, cable):
+    """ケーブルの電源から遠い側にある場所 id の集合。"""
+    adj = {}
+    for c in p.cables:
+        if c is not cable:
+            adj.setdefault(c.a, []).append(c.b)
+            adj.setdefault(c.b, []).append(c.a)
+    seen, stack = set(), [cable.b]
+    while stack:
+        x = stack.pop()
+        if x not in seen:
+            seen.add(x)
+            stack += adj.get(x, [])
+    assert "電源" not in seen or cable.b == "電源", f"ケーブルの b 側は電源から遠い側: {cable}"
+    return seen
+
+
+def _net_key(net):
+    return ({"N": 0, "L": 1}.get(net, 2), net)
+
+
 def generate(p: Problem):
-    """単線図から複線図の心線リストを作る。ボックス1個・器具はボックスから直接配線される前提（v0）。"""
+    """単線図から複線図の心線リストを作る。ボックスが複数でもよい（ケーブルは木構造・a 側が電源寄りのボックス）。"""
+    needs = {l.id: _device_needs(l) for l in p.locations if l.kind == "device"}
+    usage = {"N": {"電源"}, "L": {"電源"}}   # net → その net を使う場所
+    for lid, need in needs.items():
+        for net, _ in need:
+            usage.setdefault(net, set()).add(lid)
     wires = []
     for ci, c in enumerate(p.cables):
         la, lb = p.loc(c.a), p.loc(c.b)
@@ -77,42 +140,16 @@ def generate(p: Problem):
             # 手順1: 電源の接地側（白）・非接地側（黒）をボックスへ
             wires += [Wire(ci, "白", "N", f"{box}:N", "電源:N"), Wire(ci, "黒", "L", f"{box}:L", "電源:L")]
             continue
-        need = []   # (net, 器具側の端子)
-        for d in lb.devices:
-            if d.kind == "lamp":
-                # 手順2: 接地側（白）はすべての負荷のW端子へ / 手順4: 返り線は非接地側端子へ
-                need += [("N", f"{d.id}:W"), (f"R-{d.label}", f"{d.id}:L")]
-            elif d.kind == "outlet":
-                # 手順3: コンセントは電源に直接（W端子に白）
-                need += [("N", f"{d.id}:W"), ("L", f"{d.id}:L")]
-        for d in lb.devices:
-            if d.kind == "switch3":
-                # 3路: 0端子に電源側は非接地側、負荷側は返り線。1・3端子はもう一方の3路と渡り線どうしで結ぶ
-                need += [("L" if d.first else f"R-{d.controls}", f"{d.id}:0"),
-                         (f"T{d.controls}-1", f"{d.id}:1"), (f"T{d.controls}-3", f"{d.id}:3")]
-        sw = [d for d in lb.devices if d.kind == "switch"]
-        if sw:
-            # 手順3: 非接地側（黒）はスイッチへ。同じ場所に複数ならスイッチ間は渡り線（器具側で共通）
-            need.append(("L", "+".join(f"{d.id}:1" for d in sw)))
-            # 手順4: 返り線（スイッチ → 電灯）。スイッチ側の心線は黒以外
-            need += [(f"R-{d.controls}", f"{d.id}:2") for d in sw]
-        for d in lb.devices:
-            if d.kind == "pilot":
-                # パイロットランプ: 同じ場所のスイッチ（片切）と器具側の渡り線で並べる
-                #   常時点灯 = 非接地側と接地側の間 / 同時点滅 = 返り線と接地側の間（電灯と並列）
-                #   異時点滅 = 非接地側と返り線の間（スイッチと並列。OFFのとき電灯と直列になって点く）
-                a_net, b_net = {"always": ("N", "L"), "same": ("N", f"R-{d.controls}"),
-                                "diff": ("L", f"R-{d.controls}")}[d.mode]
-                for net, t in ((a_net, "a"), (b_net, "b")):
-                    i = next((k for k, (n, _) in enumerate(need) if n == net), None)
-                    if i is None:
-                        need.append((net, f"{d.id}:{t}"))
-                    else:
-                        need[i] = (net, need[i][1] + f"+{d.id}:{t}")
-        assert len(need) == c.cores, f"{lb.id}: 必要な心線 {len(need)} ≠ ケーブル心数 {c.cores}"
-        # 手順5: 色決め。N は白、L は黒、返り線は残りの色を 黒→白→赤 の順に使う
-        order = sorted(need, key=lambda n: {"N": 0, "L": 1}.get(n[0], 2))
-        for net, term in order:
+        if lb.kind == "box":
+            # ボックス間: 向こう側とこちら側の両方で使う net だけを通す
+            sub = _downstream(p, c)
+            need = [(net, f"{lb.id}:{net}") for net in sorted(usage, key=_net_key)
+                    if usage[net] & sub and usage[net] - sub]
+        else:
+            need = needs[lb.id]
+        assert len(need) == c.cores, f"{lb.id}: 必要な心線 {[n for n, _ in need]} ≠ ケーブル心数 {c.cores}"
+        # 手順5: 色決め。N は白、L は黒、返り線・渡り線は残りの色を 黒→白→赤 の順に使う
+        for net, term in sorted(need, key=lambda n: {"N": 0, "L": 1}.get(n[0], 2)):
             col = "白" if net == "N" else "黒" if net == "L" else colors[0]
             colors.remove(col)
             wires.append(Wire(ci, col, net, f"{box}:{net}", term))
@@ -264,10 +301,12 @@ def verify(p: Problem, wires):
 
 def box_joints(p: Problem, wires):
     """ボックス内の接続点ごとに、つながる心線の色を返す（スリーブ/コネクタ選定の下書き）。"""
+    boxes = {l.id for l in p.locations if l.kind == "box"}
     joints = {}
     for w in wires:
-        if ":" in w.end_a and p.loc(w.end_a.split(":")[0]).kind == "box":
-            joints.setdefault(w.end_a, []).append(w.color)
+        for end in (w.end_a, w.end_b):
+            if end.split(":")[0] in boxes:
+                joints.setdefault(end, []).append(w.color)
     return joints
 
 
@@ -385,6 +424,49 @@ PROBLEMS = [
             Cable("B1", "P1", "VVF1.6-2C", 2),
             Cable("B1", "P2", "VVF1.6-3C", 3),
             Cable("B1", "P3", "VVF1.6-2C", 2),
+        ],
+    ),
+    Problem(
+        7, "ボックス2個：スイッチ2個を1か所にまとめる",
+        "ボックス間を通るのは「向こう側でも使う線」だけ。ここでは白・黒とロの返り線（赤）の3本。",
+        [
+            Location("電源", "source", 15, 110),
+            Location("B1", "box", 65, 110),
+            Location("B2", "box", 130, 110),
+            Location("P1", "device", 65, 165, [_dev("L-イ", "lamp", "イ")]),
+            Location("P2", "device", 65, 45, [_dev("S-イ", "switch", "イ", controls="イ"),
+                                              _dev("S-ロ", "switch", "ロ", controls="ロ")]),
+            Location("P3", "device", 130, 165, [_dev("L-ロ", "lamp", "ロ")]),
+            Location("P4", "device", 175, 110, [_dev("C1", "outlet", "")]),
+        ],
+        [
+            Cable("B1", "電源", "VVF1.6-2C", 2),
+            Cable("B1", "P1", "VVF1.6-2C", 2),
+            Cable("B1", "P2", "VVF1.6-3C", 3),
+            Cable("B1", "B2", "VVF1.6-3C", 3),
+            Cable("B2", "P3", "VVF1.6-2C", 2),
+            Cable("B2", "P4", "VVF1.6-2C", 2),
+        ],
+    ),
+    Problem(
+        8, "ボックス2個：3路スイッチをボックスごとに分ける",
+        "3路の渡り線2本はボックス間も通す。非接地側（L）はB2で使わないので、ボックス間を通らない。",
+        [
+            Location("電源", "source", 15, 110),
+            Location("B1", "box", 65, 110),
+            Location("B2", "box", 130, 110),
+            Location("P1", "device", 65, 45, [_dev("S3-A", "switch3", "イ", controls="イ", first=True)]),
+            Location("P2", "device", 65, 165, [_dev("C1", "outlet", "")]),
+            Location("P3", "device", 130, 165, [_dev("L-イ", "lamp", "イ")]),
+            Location("P4", "device", 130, 45, [_dev("S3-B", "switch3", "イ", controls="イ")]),
+        ],
+        [
+            Cable("B1", "電源", "VVF1.6-2C", 2),
+            Cable("B1", "P1", "VVF1.6-3C", 3),
+            Cable("B1", "P2", "VVF1.6-2C", 2),
+            Cable("B1", "B2", "VVF1.6-3C", 3),
+            Cable("B2", "P3", "VVF1.6-2C", 2),
+            Cable("B2", "P4", "VVF1.6-3C", 3),
         ],
     ),
 ]
