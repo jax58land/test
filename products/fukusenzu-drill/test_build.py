@@ -137,6 +137,31 @@ def test_page_text_fits():
         assert n <= (8 if sum(l.kind == "box" for l in p.locations) > 1 else 6), f"問題{p.no}: 接続点の表が入らない"
 
 
+def test_routing_no_overlap():
+    """色（net）の違う心線どうしが、同じ線上で重ならないこと（交差はよい）。"""
+    from reportlab.lib.units import mm
+    from build import junction_xy, route_wires
+    for p in PROBLEMS:
+        w = generate(p)
+        P = lambda l: (l.x * mm, l.y * mm)
+        jxy, radius = junction_xy(p, w, P)
+        segs = []
+        for wire, pts in route_wires(p, w, P, jxy, radius):
+            for a, b in zip(pts, pts[1:]):
+                if abs(a[0] - b[0]) > 1e-6 or abs(a[1] - b[1]) > 1e-6:
+                    segs.append((wire.net, a, b))
+        for i, (n1, a1, b1) in enumerate(segs):
+            for n2, a2, b2 in segs[i + 1:]:
+                if n1 == n2:
+                    continue
+                for ax in (0, 1):          # 0: 縦線（x 一定） / 1: 横線（y 一定）
+                    if all(abs(q[ax] - a1[ax]) < 1e-6 for q in (b1, a2, b2)):
+                        o = 1 - ax
+                        lo = max(min(a1[o], b1[o]), min(a2[o], b2[o]))
+                        hi = min(max(a1[o], b1[o]), max(a2[o], b2[o]))
+                        assert hi - lo < 1e-6, f"問題{p.no}: {n1} と {n2} の線が重なっている"
+
+
 def test_pdf(tmp=Path(__file__).resolve().parent / "_test.pdf"):
     out = main(tmp)
     data = out.read_bytes()

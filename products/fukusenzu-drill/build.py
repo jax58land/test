@@ -20,6 +20,7 @@ FONT_PATH = "/usr/share/fonts/opentype/ipafont-gothic/ipag.ttf"
 DISCLAIMER = ("※本書は練習用の教材です。回路はすべてオリジナルで、試験の正式な判定基準は"
               "試験センターの公表資料が優先します。実際の施工の最終判断は有資格者が行ってください。")
 DEV_GAP = 18 * mm
+SW3_TERMS = {"0": (-6, 0), "1": (3.8, 0), "3": (6, 0)}   # 3路スイッチの端子位置（器具中心から mm）
 STROKE = {"黒": (0, 0, 0), "白": (0.62, 0.62, 0.62), "赤": (0.85, 0.1, 0.1)}
 STEPS = [
     "① 電源・器具・ボックスを単線図と同じ位置に描く",
@@ -102,14 +103,14 @@ def terminal_xy(p, term, P):
     did, t = term.split(":")
     if did == "電源":
         x, y = P(p.loc("電源"))
-        return x + 5 * mm, y + (2.5 if t == "L" else -2.5) * mm
+        return (x + 5 * mm, y + 2.5 * mm) if t == "L" else (x + 8 * mm, y - 2.5 * mm)
     for l in p.locations:
         for i, d in enumerate(l.devices):
             if d.id == did:
                 x, y = P(l)
                 x += (i - (len(l.devices) - 1) / 2) * DEV_GAP
                 if d.kind == "switch3":
-                    return x + (-6 if t == "0" else 6) * mm, y + {"0": 0, "1": 1.3, "3": -1.3}[t] * mm
+                    return x + SW3_TERMS[t][0] * mm, y + SW3_TERMS[t][1] * mm
                 return x + (-6 if t in ("W", "1", "a") else 6) * mm, y
     raise KeyError(term)
 
@@ -123,29 +124,74 @@ def net_label(net):
     return net
 
 
+H_LANES = [4, -4, 6.5, -6.5, 9, -9, 11.5, -11.5, 14, -14]   # 横方向の配線レーン（ボックスの高さからのずれ mm）
+
+
+def junction_xy(p, wires, P):
+    """ボックス内の接続点を横一列に並べる。戻り値: ({接続点: (x, y)}, {ボックス: 半径})"""
+    names = sorted(box_joints(p, wires), key=lambda j: {"N": 0, "L": 1}.get(j.split(":")[1], 2))
+    jxy, radius = {}, {}
+    for l in p.locations:
+        if l.kind == "box":
+            x, y = P(l)
+            mine = [j for j in names if j.startswith(l.id + ":")]
+            radius[l.id] = max(13, len(mine) * 2.5 + 4) * mm
+            for i, j in enumerate(mine):
+                jxy[j] = (x + (i - (len(mine) - 1) / 2) * 5 * mm, y)
+    return jxy, radius
+
+
+def route_wires(p, wires, P, jxy, radius):
+    """心線を直角に引き回す。[(wire, [(x, y), ...])] を返す。
+    上下の器具へは「接続点から縦 → 心線ごとのレーンで横 → 端子へ縦」、
+    左右（電源・コンセント・隣のボックス）へは「縦 → 横レーン → 縦」。レーンは心線ごとに別なので、色の違う線が重ならない。"""
+    boxes = {l.id: P(l) for l in p.locations if l.kind == "box"}
+    items = []
+    for w in wires:
+        bid = w.end_a.split(":")[0]
+        bx, by = boxes[bid]
+        x1, y1 = jxy[w.end_a]
+        t0 = w.end_b.split("+")[0]
+        x2, y2 = jxy[t0] if t0 in jxy else terminal_xy(p, t0, P)
+        items.append((w, bid, x1, y1, x2, y2, abs(y2 - by) > abs(x2 - bx)))
+    items.sort(key=lambda it: (it[1], it[4]))
+    vcount, hi, out = {}, 0, []
+    for w, bid, x1, y1, x2, y2, vertical in items:
+        by = boxes[bid][1]
+        if vertical:
+            d = 1 if y2 > by else -1
+            k = vcount.get((bid, d), 0)
+            vcount[(bid, d)] = k + 1
+            lane = by + d * (radius[bid] + (3 + k * 2.2) * mm)
+        else:
+            assert hi < len(H_LANES), f"問題{p.no}: 横方向の配線レーンが足りない"
+            lane = by + H_LANES[hi] * mm
+            hi += 1
+        out.append((w, [(x1, y1), (x1, lane), (x2, lane), (x2, y2)]))
+    return out
+
+
 def draw_multi(c, p, wires, ox, oy, s):
     P = lambda l: (ox + l.x * s * mm, oy + l.y * s * mm)
-    joints = box_joints(p, wires)
-    names = sorted(joints, key=lambda j: {"N": 0, "L": 1}.get(j.split(":")[1], 2))
-    jxy = {}
+    jxy, radius = junction_xy(p, wires, P)
     for l in p.locations:
         if l.kind == "box":
             x, y = P(l)
             c.setStrokeColorRGB(0.4, 0.4, 0.4)
             c.setDash(3, 2)
-            c.circle(x, y, 13 * mm)
+            c.circle(x, y, radius[l.id])
             c.setDash()
-            mine = [j for j in names if j.startswith(l.id + ":")]
-            for i, j in enumerate(mine):
-                jxy[j] = (x + (i - (len(mine) - 1) / 2) * 6 * mm, y + ((i % 2) * 2 - 1) * 3 * mm)
     # 心線
     c.setLineWidth(1.4)
-    for w in wires:
-        x1, y1 = jxy[w.end_a]
-        terms = w.end_b.split("+")
-        x2, y2 = jxy[terms[0]] if terms[0] in jxy else terminal_xy(p, terms[0], P)
+    for w, pts in route_wires(p, wires, P, jxy, radius):
         c.setStrokeColorRGB(*STROKE[w.color])
-        c.line(x1, y1, x2, y2)
+        path = c.beginPath()
+        path.moveTo(*pts[0])
+        for pt in pts[1:]:
+            path.lineTo(*pt)
+        c.drawPath(path, stroke=1, fill=0)
+        terms = w.end_b.split("+")
+        x2, y2 = pts[-1]
         # 渡り線（器具側で共通）。左側の端子どうしは下、右側の端子どうしは上に回して重ならないようにする
         off = (-2.5 if terms[0].split(":")[1] in ("W", "1", "a", "0") else 2.5) * mm
         for t in terms[1:]:
@@ -178,13 +224,12 @@ def draw_multi(c, p, wires, ox, oy, s):
             name = {"lamp": "電灯", "switch": "SW", "switch3": "3路", "outlet": "コンセント", "pilot": "PL"}[d.kind]
             c.setFont(FONT, 6)
             c.setFillColorRGB(0, 0, 0)
-            c.drawCentredString(x + dx, y - 1 * mm, name + d.label)
+            c.drawCentredString(x + dx - (1.2 * mm if d.kind == "switch3" else 0), y - 1 * mm, name + d.label)
             if d.kind == "switch3":
-                for t, (tx, ty) in {"0": (-6, 0), "1": (6, 1.3), "3": (6, -1.3)}.items():
+                for t, (tx, ty) in SW3_TERMS.items():
                     c.setFillColorRGB(0, 0, 0)
                     c.circle(x + dx + tx * mm, y + ty * mm, 0.6 * mm, fill=1)
-                    text(c, x + dx + (tx + (1 if tx > 0 else -2.2)) * mm, y + (ty - 0.8) * mm, t, 5.5,
-                         (0.3, 0.3, 0.3))
+                    text(c, x + dx + (tx - 0.8) * mm, y - 4.6 * mm, t, 5.5, (0.3, 0.3, 0.3))
             else:
                 for side in (-6, 6):
                     c.setFillColorRGB(0, 0, 0)
