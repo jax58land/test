@@ -1,0 +1,12 @@
+{
+  "name": "efizo-app",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs",
+    "setup": "node setup.mjs"
+  },
+  "dependencies": {
+    "@elevenlabs/client": "^1.26.0"
+  }
+}

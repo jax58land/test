@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>えふぃぞー</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<main class="layout">
+  <section class="panel log-panel">
+    <h2>会話ログ</h2>
+    <div id="log" class="log"><p class="muted">まだ会話はありません</p></div>
+  </section>
+
+  <section class="center">
+    <div id="orb" class="orb" data-state="off"></div>
+    <div id="state" class="state">待受オフ</div>
+    <div id="heard" class="heard">聞き取った言葉：—</div>
+    <div class="buttons">
+      <button id="btnArm">待受をオン</button>
+      <button id="btnTalk">今すぐ話す</button>
+      <button id="btnEnd" disabled>会話を終了</button>
+    </div>
+    <div id="error" class="error" hidden></div>
+  </section>
+
+  <section class="side">
+    <div class="panel">
+      <h2>起動チェック</h2>
+      <ul class="checks">
+        <li id="chkAgent"><span class="mark">…</span><span>① Agent ID が入っている</span><small></small></li>
+        <li id="chkMic"><span class="mark">…</span><span>② マイクが許可されている</span><small></small></li>
+        <li id="chkSr"><span class="mark">…</span><span>③ このブラウザで音声認識が使える</span><small></small></li>
+      </ul>
+    </div>
+    <div class="panel settings">
+      <h2>設定</h2>
+      <label for="agentId">Agent ID（ElevenLabs のエージェントのID）</label>
+      <div class="row">
+        <input id="agentId" type="password" autocomplete="off" spellcheck="false" placeholder="agent_xxxxxxxx">
+        <button id="saveAgent">保存</button>
+      </div>
+      <label for="wakeWords">呼びかけの言葉（「、」で区切って、いくつでも）</label>
+      <div class="row">
+        <input id="wakeWords" type="text" spellcheck="false">
+        <button id="saveWake">保存</button>
+      </div>
+      <p id="saved" class="muted small"></p>
+    </div>
+  </section>
+</main>
+<footer>待受中の声は、Chromeの音声認識に送られます</footer>
+<script src="/lib/elevenlabs.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>

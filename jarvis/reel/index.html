@@ -1,0 +1,843 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>ヘイ、ジャービス リール</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #f4f1ea; display: grid; place-items: center; overflow: hidden; }
+  canvas { width: min(100vw, calc(100vh * 16 / 9)); aspect-ratio: 16 / 9; display: block; }
+</style>
+</head>
+<body>
+<canvas id="c" width="1920" height="1080"></canvas>
+<script>
+"use strict";
+// ============================================================
+//  「ヘイ、ジャービス！」を伝えるモーションリール
+//  1920x1080 / 60fps / 124BPM / 9場面
+//  各場面は、その場面を描く関数自身のソースコードから始まり、
+//  コードの文字が形に組み上がる。
+// ============================================================
+const W = 1920, H = 1080, FPS = 60, BPM = 124, B = 60 / BPM;
+const BEATS = [6, 6, 6, 6, 6, 6, 6, 6, 8];
+const STARTS = BEATS.reduce((a, n, i) => (a.push(i ? a[i - 1] + BEATS[i - 1] * B : 0), a), []);
+const DURATION = STARTS[8] + BEATS[8] * B;
+
+const F = {
+  sans: '"Hiragino Sans", "Noto Sans CJK JP", "IPAGothic", sans-serif',
+  serif: '"Hiragino Mincho ProN", "Noto Serif CJK JP", "IPAMincho", serif',
+  mono: '"Menlo", "Noto Sans Mono CJK JP", monospace',
+  pixel: '"Unifont-JP", "Osaka-Mono", monospace',
+};
+
+// ---------- 小道具 ----------
+const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
+const lerp = (a, b, t) => a + (b - a) * t;
+const seg = (x, a, b) => clamp((x - a) / (b - a));
+const rnd = (i) => { const x = Math.sin(i * 127.1 + 311.7) * 43758.5453; return x - Math.floor(x); };
+const E = {
+  out3: (t) => 1 - Math.pow(1 - t, 3),
+  out5: (t) => 1 - Math.pow(1 - t, 5),
+  in3: (t) => t * t * t,
+  io3: (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2),
+  back: (t) => { const c = 1.70158; return 1 + (c + 1) * Math.pow(t - 1, 3) + c * Math.pow(t - 1, 2); },
+  bounce: (t) => {
+    const n = 7.5625, d = 2.75;
+    if (t < 1 / d) return n * t * t;
+    if (t < 2 / d) return n * (t -= 1.5 / d) * t + 0.75;
+    if (t < 2.5 / d) return n * (t -= 2.25 / d) * t + 0.9375;
+    return n * (t -= 2.625 / d) * t + 0.984375;
+  },
+};
+
+function font(size, family, weight = 900) { return `${weight} ${size}px ${family}`; }
+
+function txt(ctx, s, x, y, size, family, color, opt = {}) {
+  ctx.font = font(size, family, opt.weight ?? 900);
+  ctx.textAlign = opt.align || "center";
+  ctx.textBaseline = "middle";
+  ctx.fillStyle = color;
+  ctx.fillText(s, x, y);
+}
+
+// 縦組み：1文字ずつ下へ。長音と括弧は回し、句読点は右上へ寄せる
+function vtxt(ctx, s, x, y, size, family, color, reveal = 1, gap = 1.08) {
+  ctx.font = font(size, family);
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillStyle = color;
+  const chars = [...s];
+  const n = Math.floor(chars.length * clamp(reveal) + 1e-6);
+  for (let i = 0; i < n; i++) {
+    const c = chars[i], cy = y + i * size * gap;
+    ctx.save();
+    ctx.translate(x, cy);
+    if ("ー〜「」（）".includes(c)) ctx.rotate(Math.PI / 2);
+    if ("、。".includes(c)) ctx.translate(size * 0.6, -size * 0.6);
+    ctx.fillText(c, 0, 0);
+    ctx.restore();
+  }
+}
+
+function bg(ctx, color) { ctx.fillStyle = color; ctx.fillRect(0, 0, W, H); }
+
+// ---------- コード → 文字の粒 ----------
+const CODE = { size: 25, lh: 33, x: 60, y: 56 };
+const KEYWORDS = new Set(["function", "const", "let", "if", "for", "return", "else", "new", "of"]);
+
+function codeLayout(src) {
+  const ctx = document.createElement("canvas").getContext("2d");
+  ctx.font = font(CODE.size, F.mono, 500);
+  const chars = [];
+  src.split("\n").forEach((line, row) => {
+    let x = CODE.x, inStr = false;
+    const words = line.match(/[A-Za-z_]+/g) || [];
+    const kwAt = new Set();
+    let from = 0;
+    for (const w of words) {
+      const at = line.indexOf(w, from);
+      from = at + w.length;
+      if (KEYWORDS.has(w)) for (let k = at; k < at + w.length; k++) kwAt.add(k);
+    }
+    [...line].forEach((c, col) => {
+      if (c === '"' || c === "`") inStr = !inStr;
+      const w = ctx.measureText(c).width;
+      if (c.trim()) chars.push({ c, x: x + w / 2, y: CODE.y + row * CODE.lh, kind: kwAt.has(col) ? 1 : inStr || c === '"' ? 2 : 0 });
+      x += w;
+    });
+  });
+  return chars;
+}
+
+// 図形（文字）を画面いっぱいのキャンバスに描き、点の集まりにする
+function samplePoints(draw, want) {
+  const cv = document.createElement("canvas");
+  cv.width = W; cv.height = H;
+  const c = cv.getContext("2d");
+  draw(c);
+  const data = c.getImageData(0, 0, W, H).data;
+  const at = (x, y) => data[(y * W + x) * 4 + 3] > 128;
+  let best = null;
+  for (let step = 4; step <= 40; step++) {
+    const pts = [];
+    for (let y = step / 2 | 0; y < H; y += step)
+      for (let x = step / 2 | 0; x < W; x += step) if (at(x, y)) pts.push({ x, y });
+    if (pts.length <= want) { best = { pts, step }; break; }
+  }
+  return best;
+}
+
+// 粒を作る：コードの1文字 = 1粒。図形の点に割り当てる
+function particles(code, target, order = "rand", count = code.length) {
+  const P = Array.from({ length: count }, (_, i) => ({ ...code[i % code.length], r: rnd(i + code.length), tx: null, ty: null }));
+  const pts = target.pts.slice();
+  const key = {
+    rand: (p, i) => rnd(i * 3.7),
+    x: (p) => p.x,
+    y: (p) => p.y,
+    angle: (p) => Math.atan2(p.y - H / 2, p.x - W / 2),
+  }[order];
+  const idx = P.map((p, i) => i).sort((a, b) => key(P[a], a) - key(P[b], b));
+  pts.sort((a, b) => key(a, 0) - key(b, 0) || a.x - b.x);
+  if (order === "rand") pts.sort((a, b) => rnd(a.x * 0.13 + a.y * 0.71) - rnd(b.x * 0.13 + b.y * 0.71));
+  idx.forEach((pi, k) => {
+    if (k < pts.length) { P[pi].tx = pts[k].x; P[pi].ty = pts[k].y; }
+  });
+  return { P, step: target.step };
+}
+
+const INK = ["#2b2b2b", "#d6336c", "#1971c2"]; // 地の文・予約語・文字列
+
+// 場面の頭：自分のソースコードが流れながら打たれていく
+function codeIntro(ctx, S, b, ink, until = 1.25) {
+  if (b > until) return;
+  const fade = 1 - seg(b, until - 0.35, until);
+  const shown = Math.floor(S.code.length * clamp(0.3 + b * 0.9));
+  const scroll = b * 46;
+  ctx.font = font(CODE.size, F.mono, 500);
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  for (let i = 0; i < shown; i++) {
+    const p = S.code[i];
+    if (S.used && S.used[i] && b > S.handoff) continue;
+    ctx.globalAlpha = 0.85 * fade;
+    ctx.fillStyle = p.kind ? ink[p.kind] : ink[0];
+    ctx.fillText(p.c, p.x, p.y - scroll);
+  }
+  // カーソル
+  const last = S.code[Math.max(0, shown - 1)];
+  if (last && fade > 0) {
+    ctx.globalAlpha = fade * (Math.sin(b * 20) > 0 ? 1 : 0.2);
+    ctx.fillStyle = ink[1];
+    ctx.fillRect(last.x + 8, last.y - scroll - 12, 12, 24);
+  }
+  ctx.globalAlpha = 1;
+}
+
+// 粒を描く。pos(p) が {x, y, a, s} を返す
+function drawParticles(ctx, S, pos, color) {
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  const base = S.step * 1.35;
+  let lastSize = -1;
+  for (const p of S.P) {
+    const q = pos(p);
+    if (!q || q.a <= 0.01) continue;
+    const size = Math.max(4, Math.round(base * (q.s ?? 1)));
+    if (size !== lastSize) { ctx.font = font(size, F.mono, 800); lastSize = size; }
+    ctx.globalAlpha = clamp(q.a);
+    ctx.fillStyle = q.color || color;
+    if (q.rot) {
+      ctx.save(); ctx.translate(q.x, q.y); ctx.rotate(q.rot); ctx.fillText(p.c, 0, 0); ctx.restore();
+    } else ctx.fillText(p.c, q.x, q.y);
+  }
+  ctx.globalAlpha = 1;
+}
+
+// 粒の出発点：コードが流れていた位置（受け渡しの瞬間のスクロール込み）
+const startOf = (p, S) => ({ x: p.x, y: p.y - S.handoff * 46 });
+
+// ============================================================
+//  場面 1：ヘイ、ジャービス！ → はい、お呼びでしょうか。
+//  技：渦を巻いて集まる
+// ============================================================
+function scene1(ctx, u, S) {
+  const b = u / B;
+  bg(ctx, "#ff7a66");
+  for (let i = 0; i < 9; i++) {           // 斜めの帯が流れ続ける
+    ctx.fillStyle = i % 2 ? "rgba(255,255,255,.10)" : "rgba(255,210,190,.16)";
+    const x = ((i * 300 + u * 160) % 2700) - 500;
+    ctx.beginPath();
+    ctx.moveTo(x, 0); ctx.lineTo(x + 160, 0); ctx.lineTo(x - 440, H); ctx.lineTo(x - 600, H);
+    ctx.fill();
+  }
+  codeIntro(ctx, S, b, ["#4a1d14", "#ffffff", "#ffe066"]);
+  const lift = -170 * E.io3(seg(b, 3.1, 3.9));
+  const cx = W / 2, cy = H / 2;
+  // 組み上がる文字の下に、芯の色を敷く
+  const solid = seg(b, 2.3, 2.9);
+  if (solid > 0) {
+    ctx.globalAlpha = solid * 0.9;
+    txt(ctx, "ヘイ、ジャービス！", cx, cy + lift, 196, F.sans, "#2a0f0a");
+    ctx.globalAlpha = 1;
+  }
+  if (b > S.handoff) {
+    drawParticles(ctx, S, (p) => {
+      if (p.tx == null) return null;
+      const s = startOf(p, S);
+      const k = E.out3(seg(b, S.handoff + p.r * 0.5, S.handoff + p.r * 0.5 + 1.1));
+      const a0 = Math.atan2(s.y - cy, s.x - cx), r0 = Math.hypot(s.x - cx, s.y - cy);
+      const a1 = Math.atan2(p.ty - cy, p.tx - cx), r1 = Math.hypot(p.tx - cx, p.ty - cy);
+      const spin = (1 - k) * (p.r > 0.5 ? 5 : -5);
+      const r = lerp(r0, r1, k), a = lerp(a0, a1, k) + spin;
+      const j = Math.sin(u * 9 + p.r * 40) * 1.6 * k;
+      return { x: cx + r * Math.cos(a) + j, y: cy + r * Math.sin(a) + lift * k, a: 1, rot: (1 - k) * 3, s: lerp(2.6, 1, k) };
+    }, "#ffffff");
+  }
+  // 返事：明朝で一文字ずつ。声の輪が広がる
+  const rep = "はい、お呼びでしょうか。";
+  const n = Math.floor([...rep].length * seg(b, 3.6, 5.0));
+  if (b > 3.5) {
+    for (let k = 0; k < 4; k++) {
+      const t = ((u * 1.6 + k / 4) % 1);
+      ctx.strokeStyle = `rgba(255,255,255,${0.7 * (1 - t)})`;
+      ctx.lineWidth = 6;
+      ctx.beginPath(); ctx.arc(330, 720, 30 + t * 140, -0.9, 0.9); ctx.stroke();
+    }
+    ctx.font = font(104, F.serif, 700);
+    ctx.textAlign = "left"; ctx.textBaseline = "middle"; ctx.fillStyle = "#ffffff";
+    let x = 420;
+    [...rep].slice(0, n).forEach((c, i) => {
+      const pop = E.back(seg(b, 3.6 + i * 0.117, 3.6 + i * 0.117 + 0.3));
+      ctx.save(); ctx.translate(x + 52, 720); ctx.scale(pop, pop); ctx.fillText(c, -52, 0); ctx.restore();
+      x += ctx.measureText(c).width;
+    });
+  }
+}
+
+// ============================================================
+//  場面 2：コードは、1行も書かない
+//  技：横 → 縦の直角移動で、行が文字に詰まる／打ち消し線
+// ============================================================
+function scene2(ctx, u, S) {
+  const b = u / B;
+  bg(ctx, "#7fe5c6");
+  ctx.strokeStyle = "rgba(255,255,255,.35)";      // 方眼が流れる
+  ctx.lineWidth = 2;
+  const off = (u * 60) % 80;
+  for (let x = -off; x < W; x += 80) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); }
+  for (let y = -off; y < H; y += 80) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
+  codeIntro(ctx, S, b, ["#0f3b30", "#e03131", "#5f3dc4"]);
+  const zoom = 1 + 0.04 * seg(b, 2.5, 6);
+  ctx.save();
+  ctx.translate(W / 2, H / 2); ctx.scale(zoom, zoom); ctx.translate(-W / 2, -H / 2);
+  const solid = seg(b, 2.6, 3.0);
+  if (solid > 0) {
+    ctx.globalAlpha = solid;
+    txt(ctx, "コードは、", 960, 330, 150, F.sans, "#0f3b30");
+    txt(ctx, "1", 420, 640, 300, F.serif, "#0f3b30");
+    txt(ctx, "行も書かない", 1110, 650, 200, F.sans, "#0f3b30");
+    ctx.globalAlpha = 1;
+  }
+  if (b > S.handoff) {
+    drawParticles(ctx, S, (p) => {
+      if (p.tx == null) return null;
+      const s = startOf(p, S);
+      const row = (s.y / H);
+      const kx = E.io3(seg(b, S.handoff + row * 0.4, S.handoff + row * 0.4 + 0.7));
+      const ky = E.io3(seg(b, 1.9 + p.r * 0.3, 2.5 + p.r * 0.3));
+      return { x: lerp(s.x, p.tx, kx), y: lerp(s.y, p.ty, ky), a: 1, s: lerp(2.2, 1, ky) };
+    }, "#ffffff");
+  }
+  // 「コード」に打ち消し線を引く
+  const strike = E.out5(seg(b, 3.0, 3.5));
+  if (strike > 0) {
+    ctx.fillStyle = "#e03131";
+    ctx.save(); ctx.translate(580, 340); ctx.rotate(-0.04);
+    ctx.fillRect(0, -11, 460 * strike, 22); ctx.restore();
+  }
+  ctx.restore();
+  // 必要なのは、サービス1つ ＋ プロンプト2つ
+  const chips = [["無料のサービス", "1つ", 560], ["AIに貼るプロンプト", "2つ", 1360]];
+  chips.forEach(([label, num, x], i) => {
+    const k = E.back(seg(b, 3.7 + i * 0.5, 4.2 + i * 0.5));
+    if (k <= 0) return;
+    const y = lerp(1180, 900, k) + Math.sin(u * 4 + i) * 6;
+    ctx.fillStyle = "#ffffff";
+    ctx.beginPath(); ctx.roundRect(x - 330, y - 70, 660, 140, 70); ctx.fill();
+    txt(ctx, label, x - 70, y, 54, F.sans, "#0f3b30", { weight: 700 });
+    const pop = 1 + 0.25 * Math.max(0, Math.sin((b - 4 - i * 0.5) * Math.PI * 2)) * (1 - seg(b, 5, 6));
+    ctx.save(); ctx.translate(x + 230, y); ctx.scale(pop, pop);
+    txt(ctx, num, 0, 0, 90, F.serif, "#e03131"); ctx.restore();
+  });
+}
+
+// ============================================================
+//  場面 3：耳・頭・口。3つの部品
+//  技：縦組み／文字が雨のように落ちて積もる
+// ============================================================
+function scene3(ctx, u, S) {
+  const b = u / B;
+  bg(ctx, "#8ed6ff");
+  for (let i = 0; i < 40; i++) {                  // 細い雨の線
+    const x = (rnd(i) * W + u * 40) % W, y = ((rnd(i + 9) * H + u * 900) % (H + 200)) - 100;
+    ctx.fillStyle = "rgba(255,255,255,.5)"; ctx.fillRect(x, y, 3, 60);
+  }
+  codeIntro(ctx, S, b, ["#073b4c", "#ffffff", "#ff6b6b"]);
+  if (b > S.handoff) {
+    drawParticles(ctx, S, (p) => {
+      if (p.tx == null) return null;
+      const s = startOf(p, S);
+      const up = E.out3(seg(b, S.handoff, S.handoff + 0.3));           // 一度、上へ吸い上げる
+      const sky = 20 - p.r * 260;
+      const fall = E.bounce(seg(b, 1.25 + p.r * 0.7, 2.0 + p.r * 0.7)); // 落ちて弾む
+      const x = lerp(s.x, p.tx, up);
+      const y = fall > 0 ? lerp(sky, p.ty, fall) : lerp(s.y, sky, up);
+      return { x, y, a: 1, s: lerp(2.2, 1, fall) };
+    }, "#ffffff");
+  }
+  const parts = [["耳", "聞き取る", 1420], ["頭", "考える", 960], ["口", "読み上げる", 500]];
+  parts.forEach(([kanji, verb, x], i) => {
+    const solid = seg(b, 2.9 + i * 0.15, 3.3 + i * 0.15);
+    const bob = Math.sin(u * 3 + i * 2) * 8;
+    if (solid > 0) {
+      ctx.globalAlpha = solid;
+      txt(ctx, kanji, x, 360 + bob, 300, F.sans, "#073b4c");
+      ctx.globalAlpha = 1;
+    }
+    vtxt(ctx, verb, x, 640 + bob, 70, F.serif, "#073b4c", seg(b, 3.2 + i * 0.4, 4.0 + i * 0.4));
+    // 柱の罫線が下へ伸びる
+    const g = E.out3(seg(b, 2.8 + i * 0.2, 3.6 + i * 0.2));
+    ctx.fillStyle = "rgba(7,59,76,.35)";
+    ctx.fillRect(x + 230, 140, 4, 820 * g);
+  });
+  vtxt(ctx, "３つの部品", 1800, 150, 64, F.sans, "#ffffff", seg(b, 3.0, 3.8));
+  vtxt(ctx, "頭と口は、まとめておまかせ", 150, 150, 46, F.serif, "#073b4c", seg(b, 4.4, 5.6));
+}
+
+// ============================================================
+//  場面 4：かんたん版、約10分
+//  技：円環。文字が輪になって回り、中心へ渦で吸い込まれる／時計の針
+// ============================================================
+function scene4(ctx, u, S) {
+  const b = u / B;
+  bg(ctx, "#cdb8ff");
+  const cx = W / 2, cy = H / 2 + 20;
+  ctx.strokeStyle = "rgba(255,255,255,.45)"; ctx.lineWidth = 3;   // 目盛りがゆっくり回る
+  for (let i = 0; i < 60; i++) {
+    const a = i / 60 * Math.PI * 2 + u * 0.3, r0 = i % 5 ? 470 : 450;
+    ctx.beginPath();
+    ctx.moveTo(cx + r0 * Math.cos(a), cy + r0 * Math.sin(a));
+    ctx.lineTo(cx + 490 * Math.cos(a), cy + 490 * Math.sin(a));
+    ctx.stroke();
+  }
+  codeIntro(ctx, S, b, ["#3b1f7a", "#ffffff", "#e8590c"]);
+  const solid = seg(b, 2.9, 3.3);
+  if (solid > 0) {
+    ctx.globalAlpha = solid;
+    txt(ctx, "10", cx - 70, cy, 300, F.sans, "#3b1f7a");
+    txt(ctx, "分", cx + 190, cy + 40, 170, F.serif, "#3b1f7a");
+    txt(ctx, "約", cx - 280, cy + 60, 90, F.serif, "#3b1f7a");
+    ctx.globalAlpha = 1;
+  }
+  if (b > S.handoff) {
+    const n = S.P.length;
+    drawParticles(ctx, S, (p) => {
+      const s = startOf(p, S);
+      const ang = p.i / n * Math.PI * 2 + u * 0.8;             // 輪の上の位置（回り続ける）
+      const ring = { x: cx + 400 * Math.cos(ang), y: cy + 400 * Math.sin(ang) };
+      const k1 = E.io3(seg(b, S.handoff + p.r * 0.3, S.handoff + p.r * 0.3 + 0.7));
+      let x = lerp(s.x, ring.x, k1), y = lerp(s.y, ring.y, k1), size = 1.7;
+      if (p.tx != null) {                                       // 輪から中心の「10分」へ
+        const k2 = E.out3(seg(b, 1.9 + p.r * 0.5, 2.7 + p.r * 0.5));
+        const a = ang + k2 * 2.5, r = lerp(400, Math.hypot(p.tx - cx, p.ty - cy), k2);
+        const a2 = Math.atan2(p.ty - cy, p.tx - cx);
+        const aa = lerp(a, a2 + Math.PI * 2 * Math.round((a - a2) / (Math.PI * 2)), k2);
+        if (k2 > 0) { x = cx + r * Math.cos(aa); y = cy + r * Math.sin(aa); size = lerp(1.7, 1, k2); }
+      }
+      return { x, y, a: 1, rot: p.tx == null ? ang + Math.PI / 2 : 0, s: size };
+    }, "#ffffff");
+  }
+  // 針が回り、通ったところで STEP が開く
+  const sweep = seg(b, 2.8, 5.8) * Math.PI * 2 * 0.95;
+  if (b > 2.8) {
+    ctx.strokeStyle = "#e8590c"; ctx.lineWidth = 10; ctx.lineCap = "round";
+    ctx.beginPath(); ctx.moveTo(cx, cy);
+    ctx.lineTo(cx + 500 * Math.sin(sweep), cy - 500 * Math.cos(sweep)); ctx.stroke();
+  }
+  const steps = [["STEP1", "登録する", 0.6], ["STEP2", "作る", 2.2], ["STEP3", "話しかける", 3.9], ["かんたん版", "コードなし", 5.2]];
+  steps.forEach(([tag, label, at]) => {
+    const k = E.back(seg(sweep, at - 0.05, at + 0.35));
+    if (k <= 0) return;
+    const x = cx + 690 * Math.sin(at), y = cy - 410 * Math.cos(at);
+    ctx.save(); ctx.translate(x, y); ctx.scale(k, k);
+    ctx.fillStyle = "#ffffff";
+    ctx.beginPath(); ctx.roundRect(-170, -70, 340, 140, 24); ctx.fill();
+    txt(ctx, tag, 0, -28, 30, F.mono, "#e8590c", { weight: 700 });
+    txt(ctx, label, 0, 22, 54, F.sans, "#3b1f7a");
+    ctx.restore();
+  });
+}
+
+// ============================================================
+//  場面 5：呼ぶと、起動する
+//  技：波形。文字が音の柱になって揺れ、波が引くと言葉になる
+// ============================================================
+function scene5(ctx, u, S) {
+  const b = u / B;
+  bg(ctx, "#ffa488");
+  codeIntro(ctx, S, b, ["#5c1d0a", "#ffffff", "#1864ab"]);
+  const cols = 72, gx = W / cols;
+  const lift = -190 * E.io3(seg(b, 3.0, 3.6));
+  const solid = seg(b, 2.8, 3.1);
+  if (solid > 0) {
+    ctx.globalAlpha = solid;
+    txt(ctx, "呼ぶと、", 640, 540 + lift, 190, F.serif, "#5c1d0a");
+    txt(ctx, "起動する", 1300, 540 + lift, 210, F.sans, "#5c1d0a");
+    ctx.globalAlpha = 1;
+  }
+  if (b > S.handoff) {
+    drawParticles(ctx, S, (p) => {
+      if (p.tx == null && b > 2.9) return null;
+      const s = startOf(p, S);
+      const col = p.i % cols, row = Math.floor(p.i / cols) - 12;
+      const amp = 0.4 + 0.6 * Math.abs(Math.sin(col * 0.37 + u * 7) * Math.cos(col * 0.11 - u * 3));
+      const beat = 1 + 0.5 * Math.exp(-((b % 1) * 6));           // 拍で跳ねる
+      const wave = { x: col * gx + gx / 2, y: H / 2 + row * 22 * amp * beat };
+      const k1 = E.out3(seg(b, S.handoff, S.handoff + 0.6));
+      let x = lerp(s.x, wave.x, k1), y = lerp(s.y, wave.y, k1), size = 2;
+      if (p.tx != null) {                                       // 波が引いて、言葉になる
+        const k2 = E.io3(seg(b, 2.0 + (col / cols) * 0.5, 2.7 + (col / cols) * 0.5));
+        x = lerp(x, p.tx, k2); y = lerp(y, p.ty, k2) + lift * k2; size = lerp(2, 1, k2);
+        y += Math.sin(u * 7 - p.tx * 0.012) * 9 * seg(b, 3.2, 3.8);  // 言葉が声の波で揺れ続ける
+      }
+      return { x, y, a: p.tx == null ? 1 - seg(b, 2.3, 2.9) : 1, s: size };
+    }, "#ffffff");
+  }
+  // 状態が拍ごとに切り替わる：待受中 → 接続中 → 話しています
+  const states = [["待受中", 3.4], ["接続中", 4.2], ["話しています", 5.0]];
+  let cur = -1;
+  states.forEach(([, at], i) => { if (b >= at) cur = i; });
+  if (cur >= 0) {
+    const ox = 960, oy = 720;
+    const t = u * 2;
+    ctx.lineWidth = 8;
+    ctx.strokeStyle = "#ffffff";
+    if (cur === 0) {                         // 待受中：点線の輪がゆっくり回る
+      ctx.setLineDash([18, 16]); ctx.lineDashOffset = -t * 30;
+      ctx.beginPath(); ctx.arc(ox, oy, 110, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
+    } else if (cur === 1) {                  // 接続中：輪が細かく脈打つ
+      const r = 110 + Math.sin(u * 24) * 10;
+      ctx.beginPath(); ctx.arc(ox, oy, r, 0, Math.PI * 2); ctx.stroke();
+    } else {                                 // 話しています：満ちた円と、外へ出る輪
+      ctx.fillStyle = "#ffffff";
+      ctx.beginPath(); ctx.arc(ox, oy, 100 + Math.sin(u * 14) * 8, 0, Math.PI * 2); ctx.fill();
+      for (let k = 0; k < 3; k++) {
+        const q = (u * 1.5 + k / 3) % 1;
+        ctx.globalAlpha = 1 - q;
+        ctx.beginPath(); ctx.arc(ox, oy, 110 + q * 120, 0, Math.PI * 2); ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+    }
+    const at = states[cur][1];
+    const k = E.out3(seg(b, at, at + 0.3));
+    ctx.globalAlpha = k;
+    txt(ctx, states[cur][0], ox, 930 + (1 - k) * 40, 70, F.sans, "#5c1d0a");
+    ctx.globalAlpha = 1;
+  }
+}
+
+// ============================================================
+//  場面 6：プロンプトを、貼るだけ
+//  技：言葉の壁。文字が升目に収まり、言葉の帯が流れ、中央に札が叩きつけられる
+// ============================================================
+function scene6(ctx, u, S) {
+  const b = u / B;
+  bg(ctx, "#c8f560");
+  codeIntro(ctx, S, b, ["#2b3a00", "#d6336c", "#1864ab"]);
+  const cell = 48, colsN = W / cell;
+  if (b > S.handoff && b < 2.6) {
+    drawParticles(ctx, S, (p) => {
+      const s = startOf(p, S);
+      const gx = (p.i % colsN) * cell + cell / 2, gy = Math.floor(p.i / colsN) * cell + cell / 2;
+      const d = Math.hypot(gx - W / 2, gy - H / 2) / 1100;     // 中心から波紋状に収まる
+      const k = E.back(seg(b, S.handoff + d * 0.5, S.handoff + d * 0.5 + 0.5));
+      return { x: lerp(s.x, gx, k), y: lerp(s.y, gy, k), a: 1 - seg(b, 2.2, 2.6), s: lerp(1, 2.2, k) };
+    }, "#2b3a00");
+  }
+  // 言葉の帯：段ごとに逆向きへ流れる。書体と大きさを混ぜる
+  const words = ["Node.js", "プロンプト", "専用画面", "127.0.0.1:4321", "待受中", "接続中",
+    "聞いています", "話しています", "STEP4", "STEP5", "STEP6", "Claude", "起動して、呼びかける"];
+  const show = seg(b, 1.9, 2.6);
+  if (show > 0) {
+    const fams = [F.sans, F.serif, F.mono];
+    for (let row = 0; row < 9; row++) {
+      const y = 60 + row * 120;
+      const speed = (row % 2 ? -1 : 1) * (180 + row * 25) * (1 + seg(b, 4, 6) * 1.5);
+      let x = ((u * speed) % 2400) - 2400;
+      ctx.globalAlpha = show * (0.55 + 0.35 * (row % 3 === 1));
+      for (let k = 0; x < W + 400; k++) {
+        const w = words[(row * 5 + k) % words.length];
+        const size = row % 3 === 1 ? 92 : 70;
+        ctx.font = font(size, fams[(row + k) % 3], row % 2 ? 900 : 700);
+        ctx.textAlign = "left"; ctx.textBaseline = "middle"; ctx.fillStyle = "#2b3a00";
+        ctx.fillText(w, x, y);
+        x += ctx.measureText(w).width + 70;
+      }
+    }
+    ctx.globalAlpha = 1;
+  }
+  // 札が叩きつけられる
+  const slam = seg(b, 2.6, 3.0);
+  if (slam > 0) {
+    const sc = lerp(1.8, 1, E.out5(slam)) * (1 + 0.02 * Math.sin(u * 5));
+    const shake = (1 - slam) * 20 * Math.sin(u * 90);
+    ctx.save(); ctx.translate(W / 2 + shake, H / 2); ctx.rotate(-0.04 + 0.01 * Math.sin(u * 2)); ctx.scale(sc, sc);
+    ctx.globalAlpha = slam;
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(-560, -230, 1120, 460);
+    ctx.lineWidth = 12; ctx.strokeStyle = "#2b3a00"; ctx.strokeRect(-560, -230, 1120, 460);
+    txt(ctx, "プロンプトを、", 0, -100, 110, F.sans, "#2b3a00");
+    txt(ctx, "貼るだけ", 0, 70, 220, F.serif, "#d6336c");
+    ctx.restore(); ctx.globalAlpha = 1;
+  }
+  const tail = E.out3(seg(b, 3.8, 4.4));
+  if (tail > 0) {
+    ctx.fillStyle = "#2b3a00";
+    ctx.fillRect(W / 2 - 420, 900, 840 * tail, 100);
+    ctx.globalAlpha = tail;
+    txt(ctx, "専用画面は、AIが作る", W / 2, 950, 58, F.sans, "#c8f560");
+    ctx.globalAlpha = 1;
+  }
+}
+
+// ============================================================
+//  場面 7：声で頼める、7つのこと
+//  技：書体の混ぜ組み。爆ぜた文字が「7」に集まり、言葉が書体を替えて連打される
+// ============================================================
+function scene7(ctx, u, S) {
+  const b = u / B;
+  bg(ctx, "#ff92c8");
+  ctx.fillStyle = "rgba(255,255,255,.22)";        // 水玉が流れる
+  for (let i = 0; i < 28; i++) {
+    const x = (rnd(i) * W - u * (60 + rnd(i + 3) * 80) + W * 2) % W, y = rnd(i + 7) * H;
+    ctx.beginPath(); ctx.arc(x, y, 20 + rnd(i + 1) * 50, 0, Math.PI * 2); ctx.fill();
+  }
+  codeIntro(ctx, S, b, ["#4d0f2e", "#ffffff", "#5f3dc4"]);
+  const solid = seg(b, 2.5, 2.8);
+  if (solid > 0) {
+    ctx.globalAlpha = solid * 0.85;
+    txt(ctx, "7", 400, 560, 760, F.serif, "#4d0f2e");
+    ctx.globalAlpha = 1;
+  }
+  if (b > S.handoff) {
+    drawParticles(ctx, S, (p) => {
+      if (p.tx == null) return null;
+      const s = startOf(p, S);
+      const a = p.r * Math.PI * 2, burst = 300 + p.r * 900;      // 外へ爆ぜてから集まる
+      const k1 = E.out3(seg(b, S.handoff, S.handoff + 0.45));
+      const out = { x: s.x + Math.cos(a) * burst, y: s.y + Math.sin(a) * burst };
+      const k2 = E.io3(seg(b, 1.6 + p.r * 0.4, 2.3 + p.r * 0.4));
+      const x = lerp(lerp(s.x, out.x, k1), p.tx, k2), y = lerp(lerp(s.y, out.y, k1), p.ty, k2);
+      return { x, y, a: 1, rot: (1 - k2) * p.r * 8, s: lerp(2.6, 1, k2) };
+    }, "#ffffff");
+  }
+  txt(ctx, "声で頼める", 400, 120, 64, F.sans, "#4d0f2e");
+  // 7つを、半拍ごとに書体を替えて連打
+  const items = [
+    ["今日の優先順位", "h", F.sans], ["発信のネタ出し", "v", F.serif], ["文章の直し", "h", F.pixel],
+    ["メモの整理", "o", F.sans], ["迷ったときの比較", "h", F.serif], ["勉強の相手", "h", F.mono],
+    ["1日のふり返り", "inv", F.sans],
+  ];
+  const t0 = 2.6, step = 0.47;
+  const i = Math.floor((b - t0) / step);
+  if (i >= 0) {
+    const idx = Math.min(i, 6), k = E.out5(seg(b, t0 + idx * step, t0 + idx * step + 0.25));
+    const [label, mode, fam] = items[idx];
+    const cx = 1270, cy = 540, sc = lerp(1.25, 1, k) + 0.02 * Math.sin(u * 6);
+    // それまでの項目は、右上に小さく積む
+    for (let j = 0; j < idx; j++) txt(ctx, `${j + 1}  ${items[j][0]}`, 1840, 90 + j * 46, 32, F.sans, "rgba(77,15,46,.6)", { align: "right", weight: 700 });
+    txt(ctx, String(idx + 1), 790, 300, 120, F.mono, "#ffffff", { weight: 700 });
+    ctx.save(); ctx.translate(cx, cy); ctx.scale(sc, sc); ctx.globalAlpha = k;
+    if (mode === "v") vtxt(ctx, label, 0, -330, 92, fam, "#4d0f2e");
+    else if (mode === "o") {
+      ctx.font = font(140, fam); ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.lineWidth = 6; ctx.strokeStyle = "#4d0f2e"; ctx.strokeText(label, 0, 0);
+    } else if (mode === "inv") {
+      ctx.fillStyle = "#4d0f2e"; ctx.fillRect(-560, -110, 1120, 220);
+      txt(ctx, label, 0, 0, 130, fam, "#ff92c8");
+    } else txt(ctx, label, 0, 0, label.length > 6 ? 118 : 140, fam, "#4d0f2e", { weight: fam === F.pixel ? 400 : 900 });
+    ctx.restore(); ctx.globalAlpha = 1;
+  }
+}
+
+// ============================================================
+//  場面 8：できること、できないこと
+//  技：判子。文字が○と×の印に集まり、項目に次々と押される
+// ============================================================
+function scene8(ctx, u, S) {
+  const b = u / B;
+  const hit = [2.6, 3.0, 3.4, 3.8, 4.2, 4.6, 5.0, 5.45].map((t) => Math.exp(-Math.max(0, b - t) * 14) * (b > t));
+  const shake = hit.reduce((a, v) => a + v, 0) * 10;
+  ctx.save(); ctx.translate(Math.sin(u * 80) * shake, Math.cos(u * 70) * shake);
+  bg(ctx, "#fff4e0");
+  ctx.fillStyle = "rgba(229,54,44,.06)";            // 和紙の繊維のような斜線
+  for (let i = 0; i < 30; i++) ctx.fillRect((rnd(i) * W + u * 20) % W, 0, 2, H);
+  codeIntro(ctx, S, b, ["#5a2a1a", "#e5362c", "#1971c2"]);
+  const move = E.io3(seg(b, 2.1, 2.6));            // 大きな印 → 見出しの位置へ縮む
+  const place = (x, y, left) => ({
+    x: lerp(x, (left ? 470 : 1450) + (x - (left ? 560 : 1360)) * 0.42, move),
+    y: lerp(y, 225 + (y - 540) * 0.42, move),
+  });
+  if (b > S.handoff) {
+    drawParticles(ctx, S, (p) => {
+      if (p.tx == null) return null;
+      const s = startOf(p, S);
+      const k1 = E.in3(seg(b, S.handoff, S.handoff + 0.4));       // いったん中心へ押し固める
+      const mid = { x: W / 2 + (p.r - 0.5) * 80, y: H / 2 + (rnd(p.i) - 0.5) * 80 };
+      const k2 = E.out5(seg(b, 1.5, 2.0));
+      const t = place(p.tx, p.ty, p.tx < W / 2);
+      const x = lerp(lerp(s.x, mid.x, k1), t.x, k2), y = lerp(lerp(s.y, mid.y, k1), t.y, k2);
+      return { x, y, a: 1, s: lerp(1, 0.6, move), color: p.tx < W / 2 ? "#e5362c" : "#2b2b2b" };
+    }, "#e5362c");
+  }
+  const heads = [["できること", 470, "#e5362c"], ["このままでは、できないこと", 1450, "#2b2b2b"]];
+  heads.forEach(([label, x, col], i) => {
+    const k = E.out3(seg(b, 2.4 + i * 0.1, 2.8 + i * 0.1));
+    ctx.globalAlpha = k;
+    txt(ctx, label, x, 395, 52, F.serif, col);
+    ctx.globalAlpha = 1;
+  });
+  const items = [
+    ["日本語で、声の会話", 0], ["メールを送る", 1], ["考えの整理・優先順位", 0], ["カレンダーに予定", 1],
+    ["企画や文章の相談", 0], ["今日の天気・ニュース", 1], ["パソコンのファイル操作", 1],
+  ];
+  const row = [0, 0];
+  items.forEach(([label, side], i) => {
+    const t = 2.6 + i * 0.4, y = 490 + row[side]++ * 108, x = side ? 1450 : 470;
+    const k = E.out3(seg(b, t - 0.15, t + 0.1));
+    if (k <= 0) return;
+    ctx.globalAlpha = k;
+    txt(ctx, label, x + 40, y, 50, F.sans, "#2b2b2b", { weight: 700 });
+    ctx.globalAlpha = 1;
+    // 判子：大きく現れて、押されると止まる
+    const st = seg(b, t, t + 0.12), sc = lerp(2.6, 1, E.out3(st));
+    if (st <= 0) return;
+    ctx.save(); ctx.translate(x - 300, y); ctx.rotate(-0.2); ctx.scale(sc, sc);
+    ctx.globalAlpha = st; ctx.lineWidth = 9;
+    ctx.strokeStyle = side ? "#2b2b2b" : "#e5362c";
+    ctx.beginPath();
+    if (side) { ctx.moveTo(-34, -34); ctx.lineTo(34, 34); ctx.moveTo(34, -34); ctx.lineTo(-34, 34); }
+    else ctx.arc(0, 0, 38, 0, Math.PI * 2);
+    ctx.stroke(); ctx.restore(); ctx.globalAlpha = 1;
+  });
+  // 最後に、大きな札をひとつ押す
+  const fin = seg(b, 5.3, 5.45);
+  if (fin > 0) {
+    const sc = lerp(2.4, 1, E.out3(fin)) * (1 + 0.015 * Math.sin(u * 9));
+    ctx.save(); ctx.translate(W / 2, 975); ctx.rotate(-0.05); ctx.scale(sc, sc); ctx.globalAlpha = fin;
+    ctx.fillStyle = "#e5362c"; ctx.fillRect(-300, -58, 600, 116);
+    txt(ctx, "まずは、話し相手。", 0, 2, 64, F.serif, "#fff4e0");
+    ctx.restore(); ctx.globalAlpha = 1;
+  }
+  ctx.restore();
+}
+
+// ============================================================
+//  場面 9：まずは、10分。 → タイトル
+//  技：奥行き。文字が奥へ沈み、手前へ飛んで並ぶ／帯で切り出すタイトル
+// ============================================================
+function scene9(ctx, u, S) {
+  const b = u / B;
+  bg(ctx, "#ffffff");
+  const tints = ["#ff7a66", "#7fe5c6", "#8ed6ff", "#cdb8ff", "#ffa488", "#c8f560", "#ff92c8"];
+  tints.forEach((c, i) => {                        // ここまでの色が漂う
+    const x = W / 2 + Math.cos(i * 0.9 + u * 0.35) * (520 + i * 40);
+    const y = H / 2 + Math.sin(i * 1.3 + u * 0.3) * 330;
+    ctx.globalAlpha = 0.2; ctx.fillStyle = c;
+    ctx.beginPath(); ctx.arc(x, y, 150 + i * 12, 0, Math.PI * 2); ctx.fill();
+  });
+  ctx.globalAlpha = 1;
+  codeIntro(ctx, S, b, ["#333333", "#12b886", "#7048e8"]);
+  const out = E.in3(seg(b, 3.0, 3.4));
+  const solid = seg(b, 2.5, 2.8) * (1 - out);
+  if (solid > 0) {
+    ctx.globalAlpha = solid;
+    txt(ctx, "まずは、10分。", W / 2, H / 2 - out * 200, 200, F.sans, "#1f1f1f");
+    ctx.globalAlpha = 1;
+  }
+  if (b > S.handoff && out < 1) {
+    drawParticles(ctx, S, (p) => {
+      if (p.tx == null) return null;
+      const s = startOf(p, S);
+      const k1 = E.out3(seg(b, S.handoff, S.handoff + 0.5));     // 奥へ沈む
+      const k2 = E.out5(seg(b, 1.5 + p.r * 0.5, 2.3 + p.r * 0.5)); // 手前へ飛んで並ぶ
+      const z = lerp(lerp(1, 6 + p.r * 6, k1), 1, k2);
+      const bx = lerp(s.x, p.tx, k2), by = lerp(s.y, p.ty, k2);
+      const x = W / 2 + (bx - W / 2) / z, y = H / 2 + (by - H / 2) / z - out * 200;
+      return { x, y, a: (1 - out) * clamp(1.6 - z * 0.12), s: lerp(2.4, 1, k2) / Math.sqrt(z) };
+    }, "#12b886");
+  }
+  // タイトル：帯に切って左右から差し込む。ほんの少し寄ってから止まる（最後の余韻）
+  const settle = 1 + 0.035 * E.out3(seg(b, 3.3, 7.0));
+  ctx.save(); ctx.translate(W / 2, H / 2); ctx.scale(settle, settle); ctx.translate(-W / 2, -H / 2);
+  const lines = [["「ヘイ、ジャービス！」", 420, 150, F.sans], ["完全攻略マニュアル", 610, 132, F.serif]];
+  const slices = 6;
+  lines.forEach(([label, y, size, fam], li) => {
+    for (let s = 0; s < slices; s++) {
+      const t = 3.3 + li * 0.35 + s * 0.06;
+      const k = E.out5(seg(b, t, t + 0.6));
+      if (k <= 0) continue;
+      const h = size * 1.3 / slices, top = y - size * 0.65 + s * h;
+      const dx = (1 - k) * (s % 2 ? 1 : -1) * 900;
+      ctx.save();
+      ctx.beginPath(); ctx.rect(0, top, W, h + 1); ctx.clip();
+      txt(ctx, label, W / 2 + dx, y, size, fam, "#1f1f1f");
+      ctx.restore();
+    }
+  });
+  const bar = E.out3(seg(b, 4.3, 5.0));
+  ctx.fillStyle = "#12b886";
+  ctx.fillRect(W / 2 - 360 * bar, 720, 720 * bar, 10);
+  const sub = seg(b, 4.8, 5.6);
+  ctx.globalAlpha = sub;
+  txt(ctx, "声で呼ぶと答えるAI秘書を、コードを1行も書かずに作る", W / 2, 800 + (1 - E.out3(sub)) * 30, 44, F.sans, "#444444", { weight: 700 });
+  ctx.globalAlpha = 1;
+  ctx.restore();
+}
+
+// ============================================================
+//  組み立て
+// ============================================================
+const SCENES = [scene1, scene2, scene3, scene4, scene5, scene6, scene7, scene8, scene9];
+
+// 各場面の「形」：粒が集まる先
+const TARGETS = [
+  (c) => { c.font = font(196, F.sans); c.textAlign = "center"; c.textBaseline = "middle"; c.fillText("ヘイ、ジャービス！", W / 2, H / 2); },
+  (c) => {
+    c.textAlign = "center"; c.textBaseline = "middle";
+    c.font = font(150, F.sans); c.fillText("コードは、", 960, 330);
+    c.font = font(300, F.serif); c.fillText("1", 420, 640);
+    c.font = font(200, F.sans); c.fillText("行も書かない", 1110, 650);
+  },
+  (c) => { c.font = font(300, F.sans); c.textAlign = "center"; c.textBaseline = "middle"; [["耳", 1420], ["頭", 960], ["口", 500]].forEach(([k, x]) => c.fillText(k, x, 360)); },
+  (c) => {
+    c.textAlign = "center"; c.textBaseline = "middle";
+    c.font = font(300, F.sans); c.fillText("10", W / 2 - 70, H / 2 + 20);
+    c.font = font(170, F.serif); c.fillText("分", W / 2 + 190, H / 2 + 60);
+    c.font = font(90, F.serif); c.fillText("約", W / 2 - 280, H / 2 + 80);
+  },
+  (c) => {
+    c.textAlign = "center"; c.textBaseline = "middle";
+    c.font = font(190, F.serif); c.fillText("呼ぶと、", 640, 540);
+    c.font = font(210, F.sans); c.fillText("起動する", 1300, 540);
+  },
+  null, // 場面6は升目そのものが形
+  (c) => { c.font = font(760, F.serif); c.textAlign = "center"; c.textBaseline = "middle"; c.fillText("7", 400, 560); },
+  (c) => {
+    c.lineWidth = 60; c.lineCap = "round";
+    c.beginPath(); c.arc(560, 540, 230, 0, Math.PI * 2); c.stroke();
+    c.beginPath(); c.moveTo(1180, 360); c.lineTo(1540, 720); c.moveTo(1540, 360); c.lineTo(1180, 720); c.stroke();
+  },
+  (c) => { c.font = font(200, F.sans); c.textAlign = "center"; c.textBaseline = "middle"; c.fillText("まずは、10分。", W / 2, H / 2); },
+];
+// 粒の並べ方（場面ごとに変えて、流れ方を変える）
+const ORDER = ["angle", "y", "x", "angle", "x", "rand", "rand", "x", "rand"];
+// 一部の粒を形に使わず残す場面（輪・波形として残す）
+const SHARE = [1, 1, 1, 0.62, 0.9, 1, 1, 1, 1];
+
+let STATE = null;
+function setup() {
+  STATE = SCENES.map((fn, i) => {
+    const code = codeLayout(fn.toString());
+    const handoff = 0.95;
+    let S;
+    if (TARGETS[i]) {
+      const count = Math.max(code.length, 4200);
+      const target = samplePoints(TARGETS[i], Math.floor(count * SHARE[i]));
+      S = particles(code, target, ORDER[i], count);
+    } else S = { P: code.map((ch, k) => ({ ...ch, r: rnd(k) })), step: 18 };
+    S.P.forEach((p, k) => (p.i = k));
+    S.code = code;
+    S.handoff = handoff;
+    // 粒になった文字は、コード表示から抜く
+    S.used = code.map(() => true);
+    S.P.forEach((p) => (p.r2 = rnd(p.i * 1.91)));
+    return S;
+  });
+}
+
+const canvas = document.getElementById("c");
+const ctx = canvas.getContext("2d");
+
+function renderAt(t) {
+  t = clamp(t, 0, DURATION - 1e-6);
+  let i = 0;
+  while (i < 8 && t >= STARTS[i + 1]) i++;
+  const u = t - STARTS[i], b = u / B;
+  // 拍ごとに画面がわずかに跳ねる（最後の余韻だけは止める）
+  const still = i === 8 ? seg(b, 6.6, 7.0) : 0;
+  const bump = 1 + 0.03 * Math.exp(-(b % 1) * 4) * (1 - still);
+  ctx.save();
+  ctx.translate(W / 2, H / 2); ctx.scale(bump, bump); ctx.translate(-W / 2, -H / 2);
+  SCENES[i](ctx, u, STATE[i]);
+  ctx.restore();
+}
+
+window.DURATION = DURATION;
+window.FPS = FPS;
+window.renderAt = renderAt;
+
+(async () => {
+  const fams = [F.sans, F.serif, F.mono, F.pixel];
+  await Promise.all(fams.flatMap((f) => [document.fonts.load(font(100, f, 900), "あ亜A1"), document.fonts.load(font(100, f, 500), "あ亜A1")]));
+  setup();
+  window.__ready = true;
+  if (new URLSearchParams(location.search).has("export")) { renderAt(0); return; }
+  const t0 = performance.now();
+  const loop = (now) => { renderAt(((now - t0) / 1000) % DURATION); requestAnimationFrame(loop); };
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
