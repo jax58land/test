@@ -824,6 +824,247 @@ function renderAt(t) {
   ctx.restore();
 }
 
+// ============================================================
+//  音：音楽も効果音も、すべてここで合成する（音の素材ファイルは使わない）
+//  映像と同じ拍（124BPM）と、各場面の動きの時刻に合わせて鳴らす
+// ============================================================
+const SR = 48000;
+const midi = (n) => 440 * Math.pow(2, (n - 69) / 12);
+// 場面ごとの和音（F G Em Am F G Am G → 最後に C で解決）
+const CHORDS = [[53, 57, 60, 64], [55, 59, 62, 67], [52, 55, 59, 62], [57, 60, 64, 67], [53, 57, 60, 64],
+  [55, 59, 62, 67], [57, 60, 64, 67], [55, 59, 62, 65], [48, 55, 60, 64, 67, 74]];
+const ROOTS = [41, 43, 40, 45, 41, 43, 45, 43, 36];
+const at = (scene, beat) => STARTS[scene] + beat * B;   // 場面と拍 → 秒
+
+function makeSynth(ac) {
+  const out = ac.createDynamicsCompressor();
+  out.threshold.value = -12; out.knee.value = 8; out.ratio.value = 5; out.attack.value = 0.003; out.release.value = 0.15;
+  const master = ac.createGain(); master.gain.value = 0.85;
+  master.connect(out); out.connect(ac.destination);
+  // 残響：決まった乱数で作るインパルス
+  const ir = ac.createBuffer(2, SR * 2.2, SR);
+  for (let ch = 0; ch < 2; ch++) {
+    const d = ir.getChannelData(ch);
+    for (let i = 0; i < d.length; i++) d[i] = (rnd(i * 1.37 + ch * 99) * 2 - 1) * Math.pow(1 - i / d.length, 3.2);
+  }
+  const rev = ac.createConvolver(); rev.buffer = ir;
+  const revOut = ac.createGain(); revOut.gain.value = 0.32;
+  rev.connect(revOut); revOut.connect(master);
+  const music = ac.createGain(); music.gain.value = 0.5; music.connect(master);
+  const duck = ac.createGain(); duck.connect(music);                 // キックのたびに和音を沈める
+  const sfx = ac.createGain(); sfx.gain.value = 0.75; sfx.connect(master);
+  const noise = ac.createBuffer(1, SR * 2, SR);
+  const nd = noise.getChannelData(0);
+  for (let i = 0; i < nd.length; i++) nd[i] = rnd(i * 0.731) * 2 - 1;
+
+  const env = (g, t, a, peak, d) => {
+    g.setValueAtTime(0.0001, t);
+    g.linearRampToValueAtTime(peak, t + a);
+    g.exponentialRampToValueAtTime(0.0001, t + a + d);
+  };
+  const send = (node, dest, wet = 0) => {
+    node.connect(dest);
+    if (wet > 0) { const w = ac.createGain(); w.gain.value = wet; node.connect(w); w.connect(rev); }
+  };
+  const panned = (node, pan) => {
+    if (pan == null) return node;
+    const p = ac.createStereoPanner(); p.pan.value = pan; node.connect(p); return p;
+  };
+  function tone(dest, t, f, dur, o = {}) {
+    const osc = ac.createOscillator(); osc.type = o.type || "sine";
+    osc.frequency.setValueAtTime(f, t);
+    if (o.f2) osc.frequency.exponentialRampToValueAtTime(o.f2, t + (o.glide || dur));
+    if (o.detune) osc.detune.value = o.detune;
+    const g = ac.createGain(); env(g.gain, t, o.a ?? 0.005, o.vol ?? 0.3, dur);
+    let node = osc;
+    if (o.lp) { const f1 = ac.createBiquadFilter(); f1.type = "lowpass"; f1.frequency.value = o.lp; f1.Q.value = o.q ?? 0.7; osc.connect(f1); node = f1; }
+    node.connect(g);
+    send(panned(g, o.pan), dest, o.wet);
+    osc.start(t); osc.stop(t + (o.a ?? 0.005) + dur + 0.05);
+  }
+  function hiss(dest, t, dur, o = {}) {
+    const src = ac.createBufferSource(); src.buffer = noise; src.loop = true;
+    const f1 = ac.createBiquadFilter(); f1.type = o.type || "bandpass"; f1.Q.value = o.q ?? 1;
+    f1.frequency.setValueAtTime(o.f || 2000, t);
+    if (o.f2) f1.frequency.exponentialRampToValueAtTime(o.f2, t + dur);
+    const g = ac.createGain(); env(g.gain, t, o.a ?? 0.002, o.vol ?? 0.3, dur);
+    src.connect(f1); f1.connect(g);
+    let node = g;
+    if (o.pan != null || o.pan2 != null) {
+      const p = ac.createStereoPanner();
+      p.pan.setValueAtTime(o.pan ?? 0, t);
+      if (o.pan2 != null) p.pan.linearRampToValueAtTime(o.pan2, t + dur);
+      g.connect(p); node = p;
+    }
+    send(node, dest, o.wet);
+    src.start(t, rnd(t * 7) * 1.5); src.stop(t + (o.a ?? 0.002) + dur + 0.05);
+  }
+
+  // ---- 楽器 ----
+  const S = {
+    kick(t, v = 1) {
+      tone(music, t, 150, 0.32, { f2: 42, glide: 0.11, vol: 0.95 * v, a: 0.001 });
+      hiss(music, t, 0.015, { type: "highpass", f: 3000, vol: 0.12 * v });
+      duck.gain.setValueAtTime(0.35, t); duck.gain.linearRampToValueAtTime(1, t + B * 0.6);
+    },
+    clap(t) {
+      for (let k = 0; k < 3; k++) hiss(music, t + k * 0.011, 0.13, { f: 1500, q: 0.9, vol: 0.34, wet: 0.35 });
+      tone(music, t, 210, 0.06, { vol: 0.12 });
+    },
+    hat(t, open = false, v = 1) { hiss(music, t, open ? 0.16 : 0.035, { type: "highpass", f: 8500, vol: (open ? 0.16 : 0.12) * v, pan: 0.25 }); },
+    bass(t, n, dur) { tone(music, t, midi(n), dur, { type: "sawtooth", lp: 520, q: 4, vol: 0.32, a: 0.004 }); },
+    pad(t, notes, dur) {
+      notes.forEach((n, i) => [-9, 9].forEach((dt) =>
+        tone(duck, t, midi(n + 12), dur, { type: "sawtooth", lp: 1700, vol: 0.045, a: 0.25, detune: dt, wet: 0.5, pan: (i % 2 ? 0.3 : -0.3) })));
+    },
+    stab(t, notes) { notes.forEach((n) => tone(duck, t, midi(n + 12), 0.16, { type: "square", lp: 2600, vol: 0.05, wet: 0.3 })); },
+    pluck(t, n, v = 1, pan = 0) { tone(music, t, midi(n), 0.18, { type: "triangle", vol: 0.12 * v, wet: 0.35, pan }); },
+    crash(t, v = 1) { hiss(music, t, 1.4, { type: "highpass", f: 5200, vol: 0.18 * v, wet: 0.4 }); },
+  };
+  // ---- 効果音 ----
+  const X = {
+    type(t) { hiss(sfx, t, 0.02, { type: "highpass", f: 3500 + rnd(t) * 2500, vol: 0.09, pan: rnd(t * 3) - 0.5 }); },
+    whoosh(t, dur, f, f2, o = {}) { hiss(sfx, t, dur, { f, f2, q: 1.4, a: dur * 0.55, vol: o.vol ?? 0.35, pan: o.pan, pan2: o.pan2, wet: 0.25 }); },
+    pop(t, n, v = 1, pan = 0) { tone(sfx, t, midi(n), 0.09, { f2: midi(n) * 1.5, glide: 0.04, vol: 0.22 * v, pan, wet: 0.2 }); },
+    tick(t, v = 1) { tone(sfx, t, 2600, 0.025, { vol: 0.08 * v, type: "square", lp: 5000 }); },
+    drop(t, n) { tone(sfx, t, midi(n), 0.07, { f2: midi(n) * 0.7, glide: 0.06, vol: 0.06, pan: rnd(t * 5) * 1.4 - 0.7 }); },
+    thud(t, v = 1) {
+      tone(sfx, t, 110, 0.22, { f2: 38, glide: 0.15, vol: 0.75 * v, a: 0.001 });
+      hiss(sfx, t, 0.09, { type: "lowpass", f: 900, vol: 0.4 * v });
+    },
+    bell(t, n, v = 1) {
+      [1, 2.01, 3.03].forEach((h, i) => tone(sfx, t, midi(n) * h, 1.1 / (i + 1), { vol: 0.09 * v / (i + 1), wet: 0.6 }));
+    },
+    riser(t, dur, v = 1) {
+      tone(sfx, t, 180, dur, { type: "sawtooth", f2: 1400, glide: dur, lp: 2400, vol: 0.06 * v, a: dur * 0.9, wet: 0.3 });
+      hiss(sfx, t, dur, { f: 600, f2: 6000, q: 1.2, a: dur * 0.9, vol: 0.2 * v });
+    },
+    impact(t) { S.kick(t, 1.1); S.crash(t, 1.2); tone(sfx, t, 55, 1.2, { vol: 0.35 }); },
+  };
+  return { S, X };
+}
+
+function scoreMusic(S) {
+  const total = Math.round(DURATION / B);
+  for (let g = 0; g < total; g++) {
+    const t = g * B;
+    const sc = STARTS.findLastIndex((s) => t >= s - 1e-6), lb = Math.round((t - STARTS[sc]) / B);
+    const chord = CHORDS[sc], root = ROOTS[sc];
+    if (lb === 0 && sc < 8) S.pad(t, chord, BEATS[sc] * B);
+    if (sc === 0) {                                  // 1場面目：打鍵のあと、キックだけで立ち上がる
+      if (lb >= 1) S.kick(t, 0.8);
+      if (lb >= 2) S.hat(t + B / 2);
+      if (lb >= 3) S.bass(t + B / 2, root, B * 0.4);
+      continue;
+    }
+    if (sc === 8) {                                  // 最終場面：一度引いて、タイトルで解決
+      if (lb === 0) { S.kick(t); S.crash(t, 0.7); }
+      if (lb === 1 || lb === 2) S.hat(t + B / 2, false, 0.6);
+      if (lb === 3) { S.pad(t, chord, 12 * B); S.bass(t, root, 3 * B); S.bass(t, root + 7, 3 * B); }
+      continue;
+    }
+    S.kick(t);
+    if (g % 2 === 1) S.clap(t);
+    S.hat(t + B / 2, lb === 5);
+    if (sc >= 3) { S.hat(t + B / 4, false, 0.45); S.hat(t + B * 0.75, false, 0.45); }
+    S.bass(t + B / 2, root, B * 0.42);
+    if (lb % 2 === 1) S.bass(t + B * 0.75, root + 12, B * 0.2);
+    if (lb === 1 || lb === 4) S.stab(t + B / 2, chord);
+    if (sc >= 4) {                                   // 後半は16分のアルペジオで加速
+      for (let k = 0; k < 4; k++) S.pluck(t + k * B / 4, chord[(lb * 4 + k) % chord.length] + 12, 0.6, k % 2 ? 0.4 : -0.4);
+    }
+  }
+}
+
+function scoreSfx(S, X) {
+  for (let sc = 0; sc < 9; sc++) {
+    // どの場面も：コードが打たれる音 → 粒が飛ぶ音
+    for (let k = 0; k < 15; k++) if (rnd(sc * 31 + k) > 0.25) X.type(at(sc, k / 16 + rnd(sc * 7 + k) * 0.03));
+    if (sc > 0) S.crash(at(sc, 0), 0.55);
+  }
+  const P = Math.PI * 2;
+  // 1：渦 → 返事
+  X.whoosh(at(0, 0.95), B * 1.3, 300, 3200, { pan: -0.8, pan2: 0.8 });
+  X.bell(at(0, 2.3), 84);
+  [...Array(12)].forEach((_, i) => X.pop(at(0, 3.6 + i * 0.117), [72, 74, 76, 79, 81, 84][i % 6], 0.6, i / 11 - 0.5));
+  // 2：横 → 縦 → 打ち消し線 → 札
+  X.whoosh(at(1, 0.95), B * 0.7, 500, 2500, { pan: -0.6, pan2: 0.6 });
+  X.whoosh(at(1, 1.9), B * 0.6, 2500, 400);
+  X.bell(at(1, 2.6), 79);
+  X.whoosh(at(1, 3.0), B * 0.4, 1200, 7000, { vol: 0.4, pan: -0.5, pan2: 0.5 });
+  X.pop(at(1, 3.7), 76); X.pop(at(1, 4.2), 81);
+  // 3：吸い上げ → 雨のように落ちる
+  X.whoosh(at(2, 0.95), B * 0.3, 800, 5000);
+  for (let k = 0; k < 34; k++) X.drop(at(2, 1.25 + rnd(k * 3.1) * 1.45), [79, 81, 84, 86, 88, 91][k % 6]);
+  X.bell(at(2, 2.9), 76);
+  [3.2, 3.6, 4.0].forEach((b, i) => S.pluck(at(2, b), [64, 67, 71][i], 1.2));
+  // 4：輪 → 渦で中心へ → 時計
+  X.whoosh(at(3, 0.95), B * 0.8, 400, 1800, { pan: 0.8, pan2: -0.8 });
+  X.riser(at(3, 1.9), B * 0.9, 0.8);
+  X.bell(at(3, 2.9), 81);
+  for (let b = 2.8; b < 5.8; b += 0.5) X.tick(at(3, b), Math.round(b * 2) % 2 ? 0.6 : 1);
+  [0.6, 2.2, 3.9, 5.2].forEach((a, i) => X.pop(at(3, 2.8 + a / (P * 0.95) * 3), [72, 76, 79, 84][i], 1, i % 2 ? 0.5 : -0.5));
+  // 5：波 → 言葉 → 待受中・接続中・話しています
+  X.whoosh(at(4, 0.95), B * 0.6, 200, 900, { vol: 0.3 });
+  X.riser(at(4, 2.0), B * 0.8, 0.6);
+  X.bell(at(4, 2.8), 77);
+  [[3.4, 72], [4.2, 76], [5.0, 79]].forEach(([b, n]) => { X.pop(at(4, b), n, 1.1); X.pop(at(4, b + 0.12), n + 12, 0.5); });
+  // 6：升目に収まる → 札が叩きつけられる
+  for (let k = 0; k < 10; k++) X.tick(at(5, 0.95 + k * 0.07), 0.6 + k * 0.05);
+  X.whoosh(at(5, 2.2), B * 0.35, 3000, 600, { vol: 0.3 });
+  X.thud(at(5, 2.68), 1.1); S.crash(at(5, 2.68), 0.6);   // 札が着地する瞬間
+  X.whoosh(at(5, 3.8), B * 0.5, 600, 3000, { vol: 0.25 });
+  // 7：爆ぜる → 7に集まる → 7項目の連打
+  X.whoosh(at(6, 0.95), B * 0.4, 3000, 300, { vol: 0.45 });
+  X.riser(at(6, 1.6), B * 0.7, 0.7);
+  X.thud(at(6, 2.4), 0.6);
+  [72, 74, 76, 79, 81, 83, 84].forEach((n, i) => X.pop(at(6, 2.6 + i * 0.47), n, 1, i % 2 ? 0.4 : -0.4));
+  // 8：押し固める → 判子
+  X.whoosh(at(7, 0.95), B * 0.45, 4000, 300, { vol: 0.3 });
+  X.thud(at(7, 1.5), 0.7);
+  [2.6, 3.0, 3.4, 3.8, 4.2, 4.6, 5.0].forEach((b) => X.thud(at(7, b + 0.1), 0.8));   // 判子が着地する瞬間
+  X.thud(at(7, 5.4), 1.2); X.bell(at(7, 5.45), 79, 0.8);
+  // 9：奥へ沈む → 手前へ → タイトル
+  X.whoosh(at(8, 0.95), B * 0.5, 2000, 250, { vol: 0.3 });
+  X.whoosh(at(8, 1.5), B * 0.8, 300, 3000, { vol: 0.35 });
+  X.bell(at(8, 2.5), 84, 0.7);
+  X.riser(at(8, 1.6), B * 1.4, 0.7);
+  X.impact(at(8, 3.0));
+  X.whoosh(at(8, 3.3), B * 0.5, 700, 4000, { pan: -0.7, pan2: 0.7 });
+  X.whoosh(at(8, 3.65), B * 0.5, 700, 4000, { pan: 0.7, pan2: -0.7 });
+  X.bell(at(8, 4.3), 84); X.bell(at(8, 4.3), 88, 0.7); X.bell(at(8, 4.3), 91, 0.5);
+  X.pop(at(8, 4.8), 79, 0.5);
+}
+
+async function renderAudio() {
+  const ac = new OfflineAudioContext(2, Math.ceil(DURATION * SR), SR);
+  const { S, X } = makeSynth(ac);
+  scoreMusic(S);
+  scoreSfx(S, X);
+  return ac.startRendering();
+}
+
+// AudioBuffer → 16bit WAV（base64）
+function wavBase64(buf) {
+  const n = buf.length, ch = buf.numberOfChannels, bytes = 44 + n * ch * 2;
+  const v = new DataView(new ArrayBuffer(bytes));
+  const str = (o, s) => [...s].forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0)));
+  str(0, "RIFF"); v.setUint32(4, bytes - 8, true); str(8, "WAVE"); str(12, "fmt ");
+  v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, ch, true); v.setUint32(24, SR, true);
+  v.setUint32(28, SR * ch * 2, true); v.setUint16(32, ch * 2, true); v.setUint16(34, 16, true);
+  str(36, "data"); v.setUint32(40, n * ch * 2, true);
+  const data = [...Array(ch)].map((_, c) => buf.getChannelData(c));
+  const fadeFrom = n - SR * 0.25;                     // 最後の0.25秒で静かに閉じる
+  for (let i = 0, o = 44; i < n; i++) {
+    const f = i > fadeFrom ? (n - i) / (n - fadeFrom) : 1;
+    for (let c = 0; c < ch; c++, o += 2) v.setInt16(o, clamp(data[c][i] * f, -1, 1) * 32767, true);
+  }
+  let s = ""; const u8 = new Uint8Array(v.buffer);
+  for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000));
+  return btoa(s);
+}
+window.renderAudioWav = async () => wavBase64(await renderAudio());
+
 window.DURATION = DURATION;
 window.FPS = FPS;
 window.renderAt = renderAt;
@@ -834,8 +1075,20 @@ window.renderAt = renderAt;
   setup();
   window.__ready = true;
   if (new URLSearchParams(location.search).has("export")) { renderAt(0); return; }
-  const t0 = performance.now();
-  const loop = (now) => { renderAt(((now - t0) / 1000) % DURATION); requestAnimationFrame(loop); };
+  // ブラウザで見るとき：最初は音なしでループ。クリックすると、音つきで頭から再生する
+  let clock = { t0: performance.now(), ac: null, start: 0 };
+  const now = () => clock.ac ? clock.ac.currentTime - clock.start : (performance.now() - clock.t0) / 1000;
+  canvas.style.cursor = "pointer";
+  canvas.title = "クリックで音つき再生";
+  canvas.addEventListener("click", async () => {
+    if (clock.ac) { await clock.ac.close(); clock = { t0: performance.now(), ac: null, start: 0 }; return; }
+    const buf = await renderAudio();
+    const ac = new AudioContext({ sampleRate: SR });
+    const src = ac.createBufferSource(); src.buffer = buf; src.loop = true; src.connect(ac.destination);
+    clock = { ac, start: ac.currentTime + 0.05 };
+    src.start(clock.start);
+  });
+  const loop = () => { renderAt(((now() % DURATION) + DURATION) % DURATION); requestAnimationFrame(loop); };
   requestAnimationFrame(loop);
 })();
 </script>

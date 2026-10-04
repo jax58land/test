@@ -1,5 +1,6 @@
-// index.html を Chrome で1コマずつ描いて撮り、ffmpeg で MP4 にする。
-//   node export.mjs                 … out/完成.mp4 を作る
+// index.html を Chrome で1コマずつ描いて撮り、ffmpeg で MP4 にする。音も index.html の中で合成して重ねる。
+//   node export.mjs                 … 映像と音を書き出して out/完成.mp4 を作る
+//   node export.mjs --audio-only    … 映像は前回の out/映像のみ.mp4 を使い、音だけ作り直して重ねる
 //   node export.mjs --stills 1.2,8,25 … 指定した秒のコマを out/frames/ に PNG で書き出す
 // Chrome の場所は CHROME_PATH で指定できる（未指定なら Mac / Linux の定番の場所を探す）
 import puppeteer from "puppeteer-core";
@@ -22,6 +23,7 @@ if (!chrome) throw new Error("Chrome が見つかりません。CHROME_PATH で�
 
 const stillsArg = process.argv.indexOf("--stills");
 const stills = stillsArg > 0 ? process.argv[stillsArg + 1].split(",").map(Number) : null;
+const audioOnly = process.argv.includes("--audio-only");
 
 const browser = await puppeteer.launch({
   executablePath: chrome,
@@ -56,22 +58,42 @@ if (stills) {
 
 mkdirSync(OUT, { recursive: true });
 const total = Math.round(duration * fps);
+const video = path.join(OUT, "映像のみ.mp4");
+const wav = path.join(OUT, "音.wav");
 const mp4 = path.join(OUT, "完成.mp4");
-const ff = spawn("ffmpeg", [
-  "-y", "-loglevel", "error",
-  "-f", "image2pipe", "-framerate", String(fps), "-c:v", "png", "-i", "-",
-  "-c:v", "libx264", "-preset", "slow", "-crf", "16", "-pix_fmt", "yuv420p",
-  "-r", String(fps), "-movflags", "+faststart", mp4,
-], { stdio: ["pipe", "inherit", "inherit"] });
-const done = new Promise((res, rej) => ff.on("close", (c) => (c === 0 ? res() : rej(new Error("ffmpeg " + c)))));
+const run = (args) => new Promise((res, rej) => {
+  const p = spawn("ffmpeg", args, { stdio: ["pipe", "inherit", "inherit"] });
+  p.on("close", (c) => (c === 0 ? res() : rej(new Error("ffmpeg " + c))));
+  return p;
+});
 
-const started = Date.now();
-for (let f = 0; f < total; f++) {
-  const png = await grab(f / fps);
-  if (!ff.stdin.write(png)) await new Promise((r) => ff.stdin.once("drain", r));
-  if (f % 60 === 0) process.stdout.write(`\r${f}/${total} コマ（${((Date.now() - started) / 1000).toFixed(0)}秒）`);
+// 1. 音（音楽と効果音）を合成して WAV にする
+const b64 = await page.evaluate(() => window.renderAudioWav());
+writeFileSync(wav, Buffer.from(b64, "base64"));
+console.log("音:", path.relative(DIR, wav));
+
+// 2. 映像（音なし）
+if (!audioOnly || !existsSync(video)) {
+  const ff = spawn("ffmpeg", [
+    "-y", "-loglevel", "error",
+    "-f", "image2pipe", "-framerate", String(fps), "-c:v", "png", "-i", "-",
+    "-c:v", "libx264", "-preset", "slow", "-crf", "16", "-pix_fmt", "yuv420p",
+    "-r", String(fps), "-movflags", "+faststart", video,
+  ], { stdio: ["pipe", "inherit", "inherit"] });
+  const done = new Promise((res, rej) => ff.on("close", (c) => (c === 0 ? res() : rej(new Error("ffmpeg " + c)))));
+  const started = Date.now();
+  for (let f = 0; f < total; f++) {
+    const png = await grab(f / fps);
+    if (!ff.stdin.write(png)) await new Promise((r) => ff.stdin.once("drain", r));
+    if (f % 60 === 0) process.stdout.write(`\r${f}/${total} コマ（${((Date.now() - started) / 1000).toFixed(0)}秒）`);
+  }
+  ff.stdin.end();
+  await done;
+  console.log();
 }
-ff.stdin.end();
-await done;
 await browser.close();
-console.log(`\n完成: ${path.relative(DIR, mp4)}（${total}コマ / ${duration.toFixed(2)}秒 / ${fps}fps）`);
+
+// 3. 映像と音を重ねる
+await run(["-y", "-loglevel", "error", "-i", video, "-i", wav, "-map", "0:v", "-map", "1:a",
+  "-c:v", "copy", "-af", "loudnorm=I=-14:TP=-1.5:LRA=11", "-ar", "48000", "-c:a", "aac", "-b:a", "256k", "-shortest", "-movflags", "+faststart", mp4]);
+console.log(`完成: ${path.relative(DIR, mp4)}（${total}コマ / ${duration.toFixed(2)}秒 / ${fps}fps / 音あり）`);
