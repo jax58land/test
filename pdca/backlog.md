@@ -5,7 +5,7 @@
 - [ ] 出品後のURLを `pdca/inbox.md` に書く → 記事内の【URL】をRoutineが差し替える
 
 ## 🟡 次にやる（Claude）
-1. [ ] 第二種電気工事士 技能試験 複線図ドリル（PDF）— 仕様メモ `products/fukusenzu-drill/SPEC.md`。v0.6（例題10問そろった・出品文下書き `content/booth/fukusenzu-drill.md`）。次: 表紙・目次・解説 → 無料版 → dist/（10月中に完成目標）
+1. [ ] 第二種電気工事士 技能試験 複線図ドリル（PDF）— 仕様メモ `products/fukusenzu-drill/SPEC.md`。v0.7（10問＋目次・解説3ページ＋無料版 `preview-lite.pdf`）。次: 通し校正 → dist/ → 出品準備完了の連絡
    - 要確認: 下期技能試験の日程（試験センター公表）、リングスリーブ刻印の組合せ表の出典
 2. [ ] note 無料記事④「一人親方の見積書、Excelで材料拾いから一発で作る」→ 製品版への導線
 3. [ ] 計算ツールキット v1.1: 三相4線式、アルミ線、力率を考慮した電圧降下（要: 係数の出典確認）

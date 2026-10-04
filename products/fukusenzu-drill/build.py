@@ -14,7 +14,7 @@ from reportlab.pdfgen import canvas
 
 from circuits import PROBLEMS, box_joints, generate, verify
 
-VERSION = "0.1"
+VERSION = "0.7"
 FONT = "IPAGothic"
 FONT_PATH = "/usr/share/fonts/opentype/ipafont-gothic/ipag.ttf"
 DISCLAIMER = ("※本書は練習用の教材です。回路はすべてオリジナルで、試験の正式な判定基準は"
@@ -291,36 +291,177 @@ def page_problem(c, p, wires, cases):
     c.showPage()
 
 
-def cover(c):
+def para(c, x, y, s, size=9.5, width=56, gap=5.2, color=(0, 0, 0)):
+    """width 字で折り返して書き、次の y を返す。"""
+    for k in range(0, len(s), width):
+        text(c, x, y, s[k:k + width], size, color)
+        y -= gap * mm
+    return y
+
+
+def heading(c, s, sub=""):
+    W, H = A4
+    text(c, 15 * mm, H - 20 * mm, s, 15)
+    if sub:
+        text(c, 15 * mm, H - 28 * mm, sub, 9, (0.3, 0.3, 0.3))
+    c.setStrokeColorRGB(0.7, 0.7, 0.7)
+    c.line(15 * mm, H - 32 * mm, W - 15 * mm, H - 32 * mm)
+
+
+def footer(c):
+    text(c, 15 * mm, 8 * mm, DISCLAIMER, 6.5, (0.35, 0.35, 0.35))
+    c.showPage()
+
+
+def cover(c, problems, lite):
     W, H = A4
     text(c, 20 * mm, H - 60 * mm, "第二種電気工事士 技能試験", 16)
-    text(c, 20 * mm, H - 75 * mm, "複線図ドリル", 28)
-    text(c, 20 * mm, H - 88 * mm, f"試作版 v{VERSION}（{len(PROBLEMS)}問）", 11, (0.4, 0.4, 0.4))
+    text(c, 20 * mm, H - 75 * mm, "複線図ドリル" + ("（無料版）" if lite else ""), 28)
+    text(c, 20 * mm, H - 88 * mm, f"v{VERSION}　全{len(problems)}問", 11, (0.4, 0.4, 0.4))
     y = H - 110 * mm
     for s in ["単線図 → 複線図を、毎回同じ7ステップで書けるようにするドリルです。",
               "解答の複線図は、プログラムでスイッチの全ON/OFFを試して点灯を確認済み。",
               "回路はすべてオリジナル（候補問題の図面の転載ではありません）。"]:
         text(c, 20 * mm, y, s, 10)
         y -= 8 * mm
-    text(c, 20 * mm, 20 * mm, DISCLAIMER, 7, (0.35, 0.35, 0.35))
-    c.showPage()
+    footer(c)
 
 
-def main(out=None):
-    out = Path(out or Path(__file__).resolve().parent / "preview.pdf")
+def page_contents(c, problems):
+    W, H = A4
+    heading(c, "目次", "解説を読んでから、問題ページの単線図を自分で複線図にしてみてください。")
+    y = H - 45 * mm
+    rows = [("解説1", "複線図の7ステップと色のルール"), ("解説2", "ボックス間に何本通すか"),
+            ("解説3", "パイロットランプ3種の違い")] + [(f"問題 {p.no}", p.title) for p in problems]
+    for a, s in rows:
+        text(c, 25 * mm, y, a, 10.5)
+        text(c, 50 * mm, y, s, 10.5)
+        y -= 8 * mm
+    footer(c)
+
+
+def page_steps(c):
+    W, H = A4
+    heading(c, "解説1　複線図の7ステップと色のルール", "どの問題も、この順番で1本ずつ書き足せば迷いません。")
+    y = H - 45 * mm
+    for s in STEPS:
+        y = para(c, 20 * mm, y, s, 10.5, 52, 6) - 2 * mm
+    y -= 4 * mm
+    text(c, 20 * mm, y, "色のルール（このドリルの解答で使っている決め方）", 11)
+    y -= 8 * mm
+    for s in ["・接地側（電源のN）は白。電灯・コンセントのW端子（接地側極）には必ず白をつなぐ",
+              "・スイッチへ行く非接地側（電源のL）は黒",
+              "・返り線・3路の渡り線は、そのケーブルで余った色（白・赤）を使う",
+              "・白を接地側以外に使うのは、スイッチ行きのケーブルの中だけ"]:
+        y = para(c, 22 * mm, y, s, 9.5, 56, 5.5) - 1 * mm
+    y -= 4 * mm
+    y = para(c, 20 * mm, y, "※色や接続の正式な判定基準は、試験センターの公表資料（欠陥の判断基準など）で必ず確認してください。",
+             8.5, 62, 5, (0.35, 0.35, 0.35))
+    footer(c)
+
+
+def page_boxes(c, problems):
+    W, H = A4
+    heading(c, "解説2　ボックス間に何本通すか", "いちばん迷うところ。ルールは1行だけです。")
+    y = H - 47 * mm
+    text(c, 20 * mm, y, "その線を使う器具が、ボックスの「こちら側」と「向こう側」の両方にあるときだけ通す。", 11)
+    y -= 12 * mm
+    y = para(c, 20 * mm, y, "接地側（白）は電灯やコンセントがあれば必ず通ります。非接地側（黒）は、向こう側にスイッチや"
+             "コンセントがなければ通りません。返り線は、スイッチと電灯がボックスをはさんで別々にあるときだけ通ります。",
+             9.5, 56, 5.5)
+    y -= 6 * mm
+    text(c, 20 * mm, y, "このドリルの問題で確かめる", 11)
+    y -= 8 * mm
+    names = {"N": "接地側", "L": "非接地側"}
+    for p in problems:
+        if sum(l.kind == "box" for l in p.locations) < 2:
+            continue
+        w = generate(p)
+        cross = [x for x in w if p.loc(p.cables[x.cable].b).kind == "box"]
+        parts = []
+        for x in cross:
+            n = names.get(x.net) or (f"返り線（{x.net[2:]}）" if x.net.startswith("R-") else f"3路の渡り線（{x.net[-1]}端子）")
+            parts.append(f"{n}={x.color}")
+        text(c, 22 * mm, y, f"問題{p.no}：{len(cross)}本", 10)
+        y = para(c, 45 * mm, y, "、".join(parts), 9.5, 46, 5.5) - 3 * mm
+    footer(c)
+
+
+def page_pilots(c, problems):
+    W, H = A4
+    heading(c, "解説3　パイロットランプ3種の違い", "つなぐ場所が違うだけ。スイッチ行きの心数で見分けられます。")
+    y = H - 47 * mm
+    cols = [20, 48, 108, 140]
+    for x, s in zip(cols, ["種類", "つなぐ場所", "スイッチ行き", "点き方"]):
+        text(c, x * mm, y, s, 10)
+    y -= 3 * mm
+    c.setStrokeColorRGB(0.6, 0.6, 0.6)
+    c.line(20 * mm, y, W - 15 * mm, y)
+    y -= 7 * mm
+    info = {"always": ("常時点灯", "非接地側と接地側の間", "いつも点く"),
+            "same": ("同時点滅", "返り線と接地側の間（電灯と並列）", "電灯と同時に点く"),
+            "diff": ("異時点滅", "スイッチと並列（非接地側と返り線）", "電灯が消えているときだけ点く")}
+    for mode in ("always", "same", "diff"):
+        p = next(p for p in problems if any(d.kind == "pilot" and d.mode == mode for d in p.devices()))
+        loc = next(l for l in p.locations if any(d.kind == "pilot" for d in l.devices))
+        cores = next(cb.cores for cb in p.cables if cb.b == loc.id)
+        name, where, how = info[mode]
+        text(c, 20 * mm, y, name, 10)
+        text(c, 48 * mm, y, where, 8.5)
+        text(c, 108 * mm, y, f"{cores}心（問題{p.no}）", 9)
+        text(c, 140 * mm, y, how, 8.5)
+        y -= 9 * mm
+    y -= 4 * mm
+    y = para(c, 20 * mm, y, "異時点滅のしくみ：スイッチが切れているとき、電流は「非接地側 → パイロットランプ → 電灯 → 接地側」と"
+             "直列に流れます。パイロットランプはほとんど電流を流さないので、電灯は点かずにパイロットランプだけが点きます。"
+             "スイッチを入れるとパイロットランプの両端が同じ線になり、消えます。", 9.5, 56, 5.5)
+    y -= 3 * mm
+    para(c, 20 * mm, y, "同時点滅と常時点灯は、スイッチの場所まで接地側（白）を持っていく必要があるので3心になります。",
+         9.5, 56, 5.5)
+    footer(c)
+
+
+def page_next(c):
+    W, H = A4
+    heading(c, "続きは製品版で", "")
+    y = H - 50 * mm
+    for s in ["製品版（全10問）では、さらに次の問題を収録しています。",
+              "・3路スイッチ（2か所から点滅）",
+              "・パイロットランプ3種（異時点滅・同時点滅・常時点灯）",
+              "・ボックス2個（ボックス間に何本・何色を通すか）",
+              "・総合問題",
+              "どの解答も、スイッチの全ON/OFFを試して点灯を確認済みです。"]:
+        text(c, 20 * mm, y, s, 10.5)
+        y -= 8 * mm
+    footer(c)
+
+
+def main(out=None, lite=False):
+    name = "preview-lite.pdf" if lite else "preview.pdf"
+    out = Path(out or Path(__file__).resolve().parent / name)
     out.parent.mkdir(parents=True, exist_ok=True)
     pdfmetrics.registerFont(TTFont(FONT, FONT_PATH))
+    problems = PROBLEMS[:2] if lite else PROBLEMS
     c = canvas.Canvas(str(out), pagesize=A4)
-    c.setTitle("複線図ドリル（試作版）")
+    c.setTitle("複線図ドリル" + ("（無料版）" if lite else ""))
     c.setAuthor("")
-    cover(c)
-    for p in PROBLEMS:
+    cover(c, problems, lite)
+    if not lite:
+        page_contents(c, problems)
+    page_steps(c)
+    if not lite:
+        page_boxes(c, problems)
+        page_pilots(c, problems)
+    for p in problems:
         wires = generate(p)
         cases = verify(p, wires)
         page_problem(c, p, wires, cases)
+    if lite:
+        page_next(c)
     c.save()
     return out
 
 
 if __name__ == "__main__":
-    print(main(sys.argv[1] if len(sys.argv) > 1 else None))
+    args = [a for a in sys.argv[1:] if a != "--lite"]
+    print(main(args[0] if args else None, lite="--lite" in sys.argv))

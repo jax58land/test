@@ -167,9 +167,28 @@ def test_pdf(tmp=Path(__file__).resolve().parent / "_test.pdf"):
     data = out.read_bytes()
     assert data.startswith(b"%PDF")
     pages = len(re.findall(rb"/Type\s*/Page[^s]", data))
-    assert pages == 1 + len(PROBLEMS), pages
+    assert pages == 5 + len(PROBLEMS), pages        # 表紙・目次・解説3ページ＋問題
     assert "有資格者" in DISCLAIMER
     out.unlink()
+    # 無料版: 表紙・解説1・問題1〜2・案内
+    out = main(tmp, lite=True)
+    data = out.read_bytes()
+    assert len(re.findall(rb"/Type\s*/Page[^s]", data)) == 5
+    out.unlink()
+
+
+def test_pdf_text():
+    """解説ページの文字がページ内に収まり、免責文が全ページにあること（PDFからテキストを抜き出して確認）。"""
+    import pymupdf
+    tmp = Path(__file__).resolve().parent / "_test_text.pdf"
+    for lite in (False, True):
+        doc = pymupdf.open(main(tmp, lite=lite))
+        for i, page in enumerate(doc):
+            assert "有資格者" in page.get_text(), f"{i + 1}ページ目に免責文がない"
+            for x0, y0, x1, y1, *_ in page.get_text("words"):
+                assert x1 <= page.rect.width - 5 and y1 <= page.rect.height, f"{i + 1}ページ目で文字がはみ出している"
+        doc.close()
+    tmp.unlink()
 
 
 if __name__ == "__main__":
