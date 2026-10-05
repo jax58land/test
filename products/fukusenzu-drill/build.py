@@ -14,7 +14,7 @@ from reportlab.pdfgen import canvas
 
 from circuits import PROBLEMS, box_joints, generate, verify
 
-VERSION = "0.7"
+VERSION = "1.0"
 FONT = "IPAGothic"
 FONT_PATH = "/usr/share/fonts/opentype/ipafont-gothic/ipag.ttf"
 DISCLAIMER = ("※本書は練習用の教材です。回路はすべてオリジナルで、試験の正式な判定基準は"
@@ -253,7 +253,8 @@ def legend(c, x, y):
     c.setLineWidth(1)
 
 
-def page_problem(c, p, wires, cases):
+def page_problem(c, p):
+    """問題ページ: 単線図と手順。下半分は自分で複線図を書く欄（解答は次のページ）。"""
     W, H = A4
     text(c, 15 * mm, H - 18 * mm, f"問題 {p.no}　{p.title}", 14)
     text(c, 15 * mm, H - 25 * mm, p.note, 8.5, (0.3, 0.3, 0.3))
@@ -268,9 +269,27 @@ def page_problem(c, p, wires, cases):
         y -= 1.5 * mm
     c.setStrokeColorRGB(0.7, 0.7, 0.7)
     c.line(15 * mm, H - 128 * mm, W - 15 * mm, H - 128 * mm)
-    text(c, 15 * mm, H - 136 * mm, "【解答の複線図】", 10)
-    legend(c, 60 * mm, H - 136 * mm)
-    draw_multi(c, p, wires, 18 * mm, 0, 0.88)
+    text(c, 15 * mm, H - 136 * mm, "【ここに複線図を書いてみよう】　解答は次のページ", 10)
+    c.setStrokeColorRGB(0.88, 0.88, 0.88)     # 5mm 方眼
+    c.setLineWidth(0.3)
+    top, bottom = H - 141 * mm, 16 * mm
+    for k in range(int((top - bottom) / (5 * mm)) + 1):
+        c.line(15 * mm, bottom + k * 5 * mm, W - 15 * mm, bottom + k * 5 * mm)
+    for k in range(int((W - 30 * mm) / (5 * mm)) + 1):
+        c.line(15 * mm + k * 5 * mm, bottom, 15 * mm + k * 5 * mm, top)
+    c.setLineWidth(1)
+    text(c, 15 * mm, 8 * mm, DISCLAIMER, 6.5, (0.35, 0.35, 0.35))
+    c.showPage()
+
+
+def page_answer(c, p, wires, cases):
+    """解答ページ: 複線図とボックス内の接続点。"""
+    W, H = A4
+    text(c, 15 * mm, H - 18 * mm, f"問題 {p.no} の解答　{p.title}", 14)
+    text(c, 15 * mm, H - 26 * mm, f"【検証済み】スイッチの全{cases}通りのON/OFFで、正しく点灯することを確認", 8.5,
+         (0.1, 0.45, 0.1))
+    legend(c, 15 * mm, H - 36 * mm)
+    draw_multi(c, p, wires, 10 * mm, 55 * mm, 1.0)
     # 接続点の表
     text(c, 15 * mm, 28 * mm, "ボックス内の接続点", 9)
     joints = box_joints(p, wires)
@@ -286,7 +305,6 @@ def page_problem(c, p, wires, cases):
         rows = 4 if multi else 3
         text(c, (18 + (i // rows) * 90) * mm, (23.5 - (i % rows) * 3.8) * mm,
              f"・{box + ' ' if multi else ''}{name}: {len(cols)}本（{'・'.join(cols)}）", 7.5)
-    text(c, 15 * mm, H - 30 * mm, f"【検証済み】全{cases}通りのON/OFFで点灯を検証済み", 7.5, (0.1, 0.45, 0.1))
     text(c, 15 * mm, 8 * mm, DISCLAIMER, 6.5, (0.35, 0.35, 0.35))
     c.showPage()
 
@@ -332,7 +350,7 @@ def page_contents(c, problems):
     heading(c, "目次", "解説を読んでから、問題ページの単線図を自分で複線図にしてみてください。")
     y = H - 45 * mm
     rows = [("解説1", "複線図の7ステップと色のルール"), ("解説2", "ボックス間に何本通すか"),
-            ("解説3", "パイロットランプ3種の違い")] + [(f"問題 {p.no}", p.title) for p in problems]
+            ("解説3", "パイロットランプ3種の違い")] + [(f"問題 {p.no}", p.title + "（問題・解答）") for p in problems]
     for a, s in rows:
         text(c, 25 * mm, y, a, 10.5)
         text(c, 50 * mm, y, s, 10.5)
@@ -455,7 +473,8 @@ def main(out=None, lite=False):
     for p in problems:
         wires = generate(p)
         cases = verify(p, wires)
-        page_problem(c, p, wires, cases)
+        page_problem(c, p)
+        page_answer(c, p, wires, cases)
     if lite:
         page_next(c)
     c.save()

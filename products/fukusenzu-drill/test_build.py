@@ -167,13 +167,13 @@ def test_pdf(tmp=Path(__file__).resolve().parent / "_test.pdf"):
     data = out.read_bytes()
     assert data.startswith(b"%PDF")
     pages = len(re.findall(rb"/Type\s*/Page[^s]", data))
-    assert pages == 5 + len(PROBLEMS), pages        # 表紙・目次・解説3ページ＋問題
+    assert pages == 5 + 2 * len(PROBLEMS), pages    # 表紙・目次・解説3ページ＋問題と解答
     assert "有資格者" in DISCLAIMER
     out.unlink()
-    # 無料版: 表紙・解説1・問題1〜2・案内
+    # 無料版: 表紙・解説1・問題1〜2（問題と解答）・案内
     out = main(tmp, lite=True)
     data = out.read_bytes()
-    assert len(re.findall(rb"/Type\s*/Page[^s]", data)) == 5
+    assert len(re.findall(rb"/Type\s*/Page[^s]", data)) == 7
     out.unlink()
 
 
