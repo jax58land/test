@@ -1,4 +1,4 @@
-# BOOTH 出品情報（下書き）：第二種電気工事士 技能試験 複線図ドリル
+# BOOTH 出品情報：第二種電気工事士 技能試験 複線図ドリル
 
 > 状態: 出品準備完了（2026-10-06）。ファイル: 製品版 `dist/fukusenzu-drill.pdf`（25ページ）／無料版 `dist/fukusenzu-drill-lite.pdf`（7ページ）
 
