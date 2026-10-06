@@ -26,6 +26,7 @@ GitHub のこのリポジトリ → `dist/` フォルダ → 各ファイル →
 3. 記事②（有料 ¥780）: `content/note/02-paid-ai-prompts.md` をコピペ。【有料ライン】の位置に有料エリアを設定して公開
    - 有料記事の販売には、noteの設定で売上の受取口座登録が必要です
 4. 記事③（無料）: `content/note/03-free-ampacity.md` をコピペ。【URL】部分を記事①・BOOTHのURLに置換して公開（①の数日後でOK）
+5. 記事④（無料）: `content/note/04-free-fukusenzu.md` をコピペ。画像2枚（`content/note/img/04-*.png`）を本文の（画像：…）の位置に入れ、【URL】を複線図ドリルのURLに置換して公開（ドリル出品と同時がおすすめ）
 
 ## 3.5 複線図ドリル（10分・計算ツールキットと同じ要領）
 1. `dist/` から `fukusenzu-drill.pdf`（製品版）と `fukusenzu-drill-lite.pdf`（無料版）をダウンロード
