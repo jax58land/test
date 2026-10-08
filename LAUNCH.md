@@ -17,7 +17,7 @@ GitHub のこのリポジトリ → `dist/` フォルダ → 各ファイル →
 2. 「商品を登録」→ ダウンロード商品
    - 製品版: 商品名・説明・タグは `content/booth/denki-calc-kit.md` をコピペ、価格 ¥1,480、ファイルは製品版xlsx
    - 無料版: 商品名の頭に【無料版】を付け、価格 ¥0、ファイルは無料版xlsx
-3. 画像は後回しでOK（最初はExcelのスクリーンショット1枚で十分）
+3. 商品画像は作成済み: `content/booth/img/denki-calc-kit.png`（製品版）／`denki-calc-kit-lite.png`（無料版）をアップロード
 4. 振込先口座を登録（売上を受け取るため）
 
 ## 3. note（15分）
@@ -34,7 +34,7 @@ GitHub のこのリポジトリ → `dist/` フォルダ → 各ファイル →
 2. BOOTHで「商品を登録」→ ダウンロード商品
    - 製品版: 商品名・説明・タグは `content/booth/fukusenzu-drill.md` をコピペ、価格は案 ¥980（変えてOK）
    - 無料版: 商品名の頭に【無料版】、価格 ¥0
-3. 画像はPDFの1ページ目（表紙）か解答ページのスクリーンショット1枚で十分
+3. 商品画像は作成済み: `content/booth/img/fukusenzu-drill.png`（製品版）／`fukusenzu-drill-lite.png`（無料版）をアップロード
 
 ## 4. 終わったら（1分）
 `pdca/inbox.md` の「未処理」に、出品したURLを書いてください。翌朝の自動PDCAが記事内のURLを差し替え、次の商品に進みます。
