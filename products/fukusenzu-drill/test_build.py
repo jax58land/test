@@ -129,6 +129,17 @@ def test_two_boxes():
     must_fail(p, bad, "ボックス間の渡り線を接地側へ")
 
 
+def test_sleeve_table_ready():
+    """リングスリーブ表: 全問題の接続点の本数が表の範囲に入ること（表示は SHOW_SLEEVE で切り替え。今は非表示）。"""
+    from circuits import SHOW_SLEEVE, box_joints, sleeve
+    assert SHOW_SLEEVE is False, "出典の原文確認が済むまで非表示のまま"
+    for p in PROBLEMS:
+        assert all(c.spec.startswith("VVF1.6") for c in p.cables), f"問題{p.no}: 1.6mm 以外は表が未対応"
+        for j, cols in box_joints(p, generate(p)).items():
+            assert sleeve(len(cols)) is not None, f"問題{p.no} {j}: {len(cols)}本は表にない"
+    assert sleeve(2) == ("小", "○") and sleeve(4) == ("小", "小") and sleeve(5) == ("中", "中")
+
+
 def test_page_text_fits():
     from circuits import box_joints
     for p in PROBLEMS:
