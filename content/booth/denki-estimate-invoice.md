@@ -2,6 +2,7 @@
 
 > 状態: 出品準備完了（2026-10-11）。ファイル: `dist/denki-estimate-invoice.xlsx`。
 > 出品は計算ツールキット・複線図ドリルの後でOK（売れ行きを見てから）。
+> 商品画像: `content/booth/img/denki-estimate-invoice.png`
 
 ## 商品名（BOOTHにコピペ）
 電気工事 見積書・請求書テンプレート｜見積→請求が転記ゼロ・インボイス対応【Excel】

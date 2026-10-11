@@ -99,6 +99,39 @@ def drill(lite):
     return img
 
 
+def estimate_invoice():
+    """見積書・請求書: 販売ファイルを pycel で計算させ、見積→請求の流れと金額を描く。"""
+    import sys
+    sys.path.insert(0, str(ROOT / "products" / "estimate-invoice"))
+    from build import FIRST, LINES, EXTRA
+    xl = ExcelCompiler(filename=str(DIST / "denki-estimate-invoice.xlsx"))
+    est_last, inv_last = FIRST + LINES - 1, FIRST + LINES + EXTRA
+    est_total = xl.evaluate(f"見積書!G{est_last + 3}")
+    inv_sub, inv_tax, inv_total = (xl.evaluate(f"請求書!G{inv_last + k}") for k in (1, 2, 3))
+    img, d, y = base("見積書・請求書", "電気工事の書類を Excel で",
+                     ["見積の明細がそのまま請求書へ（転記ゼロ）", "自社情報・登録番号は1回入れるだけ",
+                      "インボイスの記載事項に対応・マクロ不使用"], False)
+    y += 30
+    w = (SIZE - 100 - 120) // 2
+    for i, (title, rows) in enumerate([("見積書", [("合計（税込）", f"¥{est_total:,.0f}")]),
+                                       ("請求書", [("10%対象 小計", f"¥{inv_sub:,.0f}"), ("消費税（10%）", f"¥{inv_tax:,.0f}"),
+                                                  ("合計（税込）", f"¥{inv_total:,.0f}")])]):
+        x = 50 + i * (w + 120)
+        d.rounded_rectangle([x, y, x + w, y + 420], 20, fill=LIGHT, outline=(215, 220, 230), width=2)
+        d.rectangle([x, y, x + w, y + 80], fill=NAVY)
+        d.text((x + 30, y + 18), title, font=font(42), fill="white")
+        ry = y + 110
+        for label, value in rows:
+            d.text((x + 30, ry), label, font=font(30), fill=GRAY)
+            d.text((x + 30, ry + 36), value, font=font(40), fill=NAVY)
+            ry += 98 if len(rows) > 1 else 0
+    ax = 50 + w + 20
+    d.polygon([(ax, y + 195), (ax + 70, y + 210), (ax, y + 225)], fill=ACCENT)
+    d.rectangle([ax - 10, y + 203, ax + 10, y + 217], fill=ACCENT)
+    d.text((50, y + 450), "請求書で入れるのは、請求日・完了日・追加工事だけ（入力例の金額）", font=font(32), fill=GRAY)
+    return img
+
+
 def main():
     OUT.mkdir(parents=True, exist_ok=True)
     made = []
@@ -107,6 +140,9 @@ def main():
             path = OUT / f"{stem}{'-lite' if lite else ''}.png"
             fn(lite).save(path)
             made.append(path)
+    path = OUT / "denki-estimate-invoice.png"
+    estimate_invoice().save(path)
+    made.append(path)
     return made
 
 
