@@ -1,7 +1,8 @@
 # バックログ（上から優先。Routineが毎日見直す）
 
 ## 🔴 オーナー待ち（人にしかできないこと）
-- [ ] BOOTH・note アカウント作成と出品（手順: `LAUNCH.md`。計算ツールキット＋複線図ドリル）
+- [ ] **最優先: 複線図ドリルだけ先に出品（`LAUNCH-QUICK.md`・15分）**。期限の目安は11月上旬（試験は12/12・13）
+- [ ] 残りの出品（`LAUNCH.md`。計算ツールキット・note記事・見積請求）
 - [ ] 出品後のURLを `pdca/inbox.md` に書く → 記事内の【URL】をRoutineが差し替える
 
 ## 🟡 次にやる（Claude）
@@ -16,6 +17,7 @@
 - バンドル ¥2,980（商品3つ以上そろったら）→ 3商品そろった。出品後の数字を見て提案する
 
 ## ✅ 完了
+- [x] 2026-10-17 最短出品手順 `LAUNCH-QUICK.md`（複線図ドリルだけ・5ステップ・15分）
 - [x] 2026-10-16 全商品テストの一括実行 `tools/check_all.py`（4件すべてOK）
 - [x] 2026-10-12 X投稿ネタ30本（`content/x/posts.md`。140字以内を自動チェック）／見積・請求Excelの商品画像
 - [x] 2026-10-11 見積書・請求書Excel（インボイス対応）v1.0（`dist/denki-estimate-invoice.xlsx`・出品文 `content/booth/denki-estimate-invoice.md`）
