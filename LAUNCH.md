@@ -38,6 +38,8 @@ GitHub のこのリポジトリ → `dist/` フォルダ → 各ファイル →
    - 無料版: 商品名の頭に【無料版】、価格 ¥0
 3. 商品画像は作成済み: `content/booth/img/fukusenzu-drill.png`（製品版）／`fukusenzu-drill-lite.png`（無料版）をアップロード
 
+> 記事の【URL:…】は手で書き換えなくても大丈夫です。出品したURLを `pdca/inbox.md` に書けば、翌朝に差し替え済みの原稿を `content/ready/` に用意します（そちらをコピペ）。
+
 ## 4. 終わったら（1分）
 `pdca/inbox.md` の「未処理」に、出品したURLを書いてください。翌朝の自動PDCAが記事内のURLを差し替え、次の商品に進みます。
 

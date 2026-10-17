@@ -16,6 +16,7 @@ CHECKS = [
     ("複線図ドリル", ROOT / "products" / "fukusenzu-drill", "test_build.py"),
     ("見積書・請求書", ROOT / "products" / "estimate-invoice", "test_build.py"),
     ("X投稿ネタ", ROOT / "content" / "x", "posts.py"),
+    ("URL差し替え", ROOT / "tools", "test_apply_urls.py"),
 ]
 
 

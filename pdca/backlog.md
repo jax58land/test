@@ -3,7 +3,7 @@
 ## 🔴 オーナー待ち（人にしかできないこと）
 - [ ] **最優先: 複線図ドリルだけ先に出品（`LAUNCH-QUICK.md`・15分）**。期限の目安は11月上旬（試験は12/12・13）
 - [ ] 残りの出品（`LAUNCH.md`。計算ツールキット・note記事・見積請求）
-- [ ] 出品後のURLを `pdca/inbox.md` に書く → 記事内の【URL】をRoutineが差し替える
+- [ ] 出品後のURLを `pdca/inbox.md` に書く → Routineが `content/urls.json` に入れて `tools/apply_urls.py` で差し替え済み原稿を作る
 
 ## 🟡 次にやる（Claude）
 1. [ ] 複線図ドリル v1.1: リングスリーブ表を一次資料（JIS C 2806 付表・メーカーカタログ）で確認 → `SHOW_SLEEVE=True` で解答ページに載せる（表・コードは準備済み。調査メモ `docs/research/2026-10-10-exam-and-sleeve.md`）
@@ -17,6 +17,7 @@
 - バンドル ¥2,980（商品3つ以上そろったら）→ 3商品そろった。出品後の数字を見て提案する
 
 ## ✅ 完了
+- [x] 2026-10-18 記事・投稿のURL欄を【URL:商品名】に統一、差し替えスクリプト `tools/apply_urls.py`（`content/urls.json` → `content/ready/`）とテスト
 - [x] 2026-10-17 最短出品手順 `LAUNCH-QUICK.md`（複線図ドリルだけ・5ステップ・15分）
 - [x] 2026-10-16 全商品テストの一括実行 `tools/check_all.py`（4件すべてOK）
 - [x] 2026-10-12 X投稿ネタ30本（`content/x/posts.md`。140字以内を自動チェック）／見積・請求Excelの商品画像
