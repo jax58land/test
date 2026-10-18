@@ -169,14 +169,14 @@ def build_vdrop(wb, rows=20):
             if col == "G":
                 c.number_format = "0.0%"
         dv.add(f"B{r}")
-        blank = f'OR(B{r}="",D{r}="",E{r}="",F{r}="")'
+        blank = f'OR(B{r}="",D{r}="",E{r}="",F{r}="",N(F{r})<=0)'   # 断面積0は割り算できないので空欄扱い
         cell(ws, f"H{r}", f'=IFERROR(INDEX(参照表!$B$5:$B$7,MATCH(B{r},参照表!$A$5:$A$7,0)),"")',
              fill=FILL_OUT, border=True, fmt="0.0")
         cell(ws, f"I{r}", f'=IF({blank},"",H{r}*E{r}*D{r}/(1000*F{r}))', fill=FILL_OUT, border=True, fmt="0.00")
-        cell(ws, f"J{r}", f'=IF(OR(I{r}="",C{r}=""),"",I{r}/C{r})', fill=FILL_OUT, border=True, fmt="0.00%")
+        cell(ws, f"J{r}", f'=IF(OR(I{r}="",C{r}="",N(C{r})<=0),"",I{r}/C{r})', fill=FILL_OUT, border=True, fmt="0.00%")
         cell(ws, f"K{r}", f'=IF(OR(J{r}="",G{r}=""),"",IF(J{r}<=G{r},"OK","NG"))', fill=FILL_OUT,
              border=True, align=CENTER)
-        cell(ws, f"L{r}", f'=IF(OR(H{r}="",D{r}="",E{r}="",C{r}="",G{r}=""),"",H{r}*E{r}*D{r}/(1000*C{r}*G{r}))',
+        cell(ws, f"L{r}", f'=IF(OR(H{r}="",D{r}="",E{r}="",C{r}="",G{r}="",N(C{r})<=0,N(G{r})<=0),"",H{r}*E{r}*D{r}/(1000*C{r}*G{r}))',
              fill=FILL_OUT, border=True, fmt="0.00")
         cell(ws, f"M{r}", f'=IF(L{r}="","",IF(L{r}>MAX(参照表!$A$12:$A$24),"要検討",'
                           f'INDEX(参照表!$A$12:$A$24,COUNTIF(参照表!$A$12:$A$24,"<"&L{r})+1)))',

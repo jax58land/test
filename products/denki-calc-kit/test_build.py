@@ -74,7 +74,24 @@ def test_lite():
     print(f"lite: {n} formulas OK")
 
 
+def test_zero_inputs_do_not_show_errors():
+    """断面積・基準電圧・許容降下率に 0 を入れても #DIV/0! を出さない（2026-10-19 に見つけた不具合の再発防止）。"""
+    for name in ("denki-calc-kit.xlsx", "denki-calc-kit-lite.xlsx"):
+        xl = ExcelCompiler(filename=str(DIST / name))
+        for ref in ("C6", "F6", "G6"):
+            for c in "HIJKLM":
+                xl.evaluate(f"電圧降下!{c}6")
+            orig = xl.evaluate(f"電圧降下!{ref}")
+            xl.set_value(f"電圧降下!{ref}", 0)
+            for c in "IJKLM":
+                v = xl.evaluate(f"電圧降下!{c}6")
+                assert not (isinstance(v, str) and v.startswith("#")), f"{name} {ref}=0 で {c}6 が {v}"
+            xl.set_value(f"電圧降下!{ref}", orig)
+
+
 if __name__ == "__main__":
     test_full()
     test_lite()
     test_rounding_edges()
+    test_zero_inputs_do_not_show_errors()
+    print("zero-input test ok")
