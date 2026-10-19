@@ -81,6 +81,33 @@ def test_tax_rounds_down_once():
     assert xl.evaluate(f"請求書!G{INV_LAST + 2}") == 12130      # 請求書にも反映
 
 
+def test_missing_tax_rate_is_flagged():
+    """税率を消したとき、黙って税0円にせず「税率未入力」と表示する（2026-10-20 の境目テストで発見）。"""
+    xl = ExcelCompiler(filename=str(build()))
+    xl.evaluate("自社情報!B16")
+    for v in ("", 0):
+        xl.set_value("自社情報!B16", v)
+        assert xl.evaluate(f"見積書!G{EST_LAST + 2}") == "税率未入力", v
+        assert xl.evaluate(f"見積書!G{EST_LAST + 3}") == "税率未入力", v
+        assert xl.evaluate(f"請求書!G{INV_LAST + 3}") == "税率未入力", v
+    xl.set_value("自社情報!B16", 0.1)
+    assert xl.evaluate(f"見積書!G{EST_LAST + 3}") == 133430
+
+
+def test_edge_inputs():
+    xl = ExcelCompiler(filename=str(build()))
+    r = FIRST + 6
+    for col in "DF":
+        xl.evaluate(f"見積書!{col}{r}")
+    xl.set_value(f"見積書!D{r}", 2.5)
+    xl.set_value(f"見積書!F{r}", 333)
+    assert xl.evaluate(f"見積書!G{r}") == 833                    # 832.5 → 円未満四捨五入
+    xl.set_value(f"見積書!D{r}", 1)
+    xl.set_value(f"見積書!F{r}", -5000)                         # 値引き行
+    assert xl.evaluate(f"見積書!G{EST_LAST + 1}") == 121300 - 5000
+    assert xl.evaluate(f"請求書!G{r}") == -5000
+
+
 def test_invoice_required_fields_present():
     """インボイスの記載事項に対応する欄がそろっていること。"""
     wb = load_workbook(build())

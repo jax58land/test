@@ -137,10 +137,11 @@ def totals(ws, first, last, row):
     out(ws, f"G{row}", f"=SUM(G{first}:G{last})", YEN, F_BOLD, True)
     cell(ws, f"E{row + 1}", "消費税（10%）", F_BOLD, border=True)
     ws.merge_cells(f"E{row + 1}:F{row + 1}")
-    out(ws, f"G{row + 1}", f"=ROUNDDOWN(G{row}*{C(16)},0)", YEN, F_BOLD, True)
+    # 税率が空・0のときは黙って税0円にせず「税率未入力」と出す（合計も止める）
+    out(ws, f"G{row + 1}", f'=IF(N({C(16)})<=0,"税率未入力",ROUNDDOWN(G{row}*{C(16)},0))', YEN, F_BOLD, True)
     cell(ws, f"E{row + 2}", "合計（税込）", F_BOLD, border=True)
     ws.merge_cells(f"E{row + 2}:F{row + 2}")
-    out(ws, f"G{row + 2}", f"=G{row}+G{row + 1}", YEN, F_BOLD, True)
+    out(ws, f"G{row + 2}", f'=IF(ISNUMBER(G{row + 1}),G{row}+G{row + 1},"税率未入力")', YEN, F_BOLD, True)
     return f"G{row + 2}"
 
 
