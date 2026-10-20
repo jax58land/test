@@ -17,6 +17,7 @@ CHECKS = [
     ("見積書・請求書", ROOT / "products" / "estimate-invoice", "test_build.py"),
     ("X投稿ネタ", ROOT / "content" / "x", "posts.py"),
     ("URL差し替え", ROOT / "tools", "test_apply_urls.py"),
+    ("説明文の数字と商品の一致", ROOT / "tools", "test_claims.py"),
 ]
 
 
