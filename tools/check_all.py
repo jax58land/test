@@ -19,6 +19,7 @@ CHECKS = [
     ("URL差し替え", ROOT / "tools", "test_apply_urls.py"),
     ("説明文の数字と商品の一致", ROOT / "tools", "test_claims.py"),
     ("販売ファイルが最新（作り直しと一致）", ROOT / "tools", "test_dist_fresh.py"),
+    ("個人情報・作業環境の痕跡なし", ROOT / "tools", "test_privacy.py"),
 ]
 
 
