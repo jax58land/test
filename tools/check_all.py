@@ -20,6 +20,7 @@ CHECKS = [
     ("説明文の数字と商品の一致", ROOT / "tools", "test_claims.py"),
     ("販売ファイルが最新（作り直しと一致）", ROOT / "tools", "test_dist_fresh.py"),
     ("個人情報・作業環境の痕跡なし", ROOT / "tools", "test_privacy.py"),
+    ("免責文（全商品・記事・出品文の枠内）", ROOT / "tools", "test_disclaimer.py"),
 ]
 
 
