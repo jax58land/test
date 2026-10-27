@@ -31,6 +31,6 @@ note記事（無料4本・有料1本）とX投稿ネタ30本も用意済み（`c
 
 ## 品質チェック（開発用）
 ```bash
-pip install openpyxl pycel reportlab pymupdf pillow
-python tools/check_all.py   # 全商品のテスト＋記事・出品文の数字と商品の一致
+python3 -m pip install openpyxl pycel reportlab pymupdf pillow   # 「pip」単体だと別の Python に入ることがある
+python3 tools/check_all.py   # 環境チェック → 全商品のテスト＋記事・出品文の数字と商品の一致
 ```

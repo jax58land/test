@@ -1,6 +1,7 @@
 """全商品のテストをまとめて実行する（出品前・変更後の確認用）。
 
-usage: python tools/check_all.py
+usage: python3 tools/check_all.py
+最初に必要なライブラリが「この Python で」import できるかを確かめ、だめなら直し方を1行で出して止まる。
 - 計算ツールキット（dist の xlsx を pycel で検証）
 - 複線図ドリル（点灯シミュレーション・誤配線検出・PDF）
 - 見積書・請求書（pycel で合計・税・請求書の連動）
@@ -24,7 +25,27 @@ CHECKS = [
 ]
 
 
+MODULES = {"openpyxl": "openpyxl", "pycel": "pycel", "reportlab": "reportlab", "pymupdf": "pymupdf", "PIL": "pillow"}
+
+
+def missing_modules():
+    """テストと同じ Python で import できないライブラリ（pip が別の Python に入れた・壊れた PIL など）。"""
+    bad = []
+    for mod, pkg in MODULES.items():
+        r = subprocess.run([sys.executable, "-c", f"import {mod}"], capture_output=True, text=True)
+        if r.returncode != 0:
+            bad.append((pkg, r.stderr.strip().splitlines()[-1] if r.stderr.strip() else "?"))
+    return bad
+
+
 def main():
+    bad = missing_modules()
+    if bad:
+        for pkg, err in bad:
+            print(f"NG  環境: {pkg} が使えない（{err}）")
+        pkgs = " ".join(pkg for pkg, _ in bad)
+        print(f"→ {sys.executable} -m pip install --ignore-installed {pkgs}  を実行してからやり直す（商品の不具合ではない）")
+        return 2
     failed = []
     for name, cwd, script in CHECKS:
         r = subprocess.run([sys.executable, script], cwd=cwd, capture_output=True, text=True)
